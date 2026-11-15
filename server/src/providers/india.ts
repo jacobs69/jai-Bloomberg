@@ -102,6 +102,32 @@ const QUOTE_COLUMNS = [
 
 const num = (v: unknown): number | null => (typeof v === "number" && isFinite(v) ? v : null);
 
+const TV_COOLDOWN_MS = 60_000;
+let tvCooldownUntil = 0;
+
+async function tvIndiaPost(body: unknown): Promise<any> {
+  if (Date.now() < tvCooldownUntil) {
+    throw new Error("tradingview india rate-limited / unreachable (cooling down)");
+  }
+  let res: Response;
+  try {
+    res = await fetch("https://scanner.tradingview.com/india/scan", {
+      method: "POST",
+      headers: TV_HEADERS,
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(4_500),
+    });
+  } catch (err) {
+    tvCooldownUntil = Date.now() + TV_COOLDOWN_MS;
+    throw err;
+  }
+  if (!res.ok) {
+    if (res.status === 429) tvCooldownUntil = Date.now() + TV_COOLDOWN_MS;
+    throw new Error(`tradingview india scan ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function quotes(symbols: string[]): Promise<yahoo.Quote[]> {
   const cleaned = symbols.map(cleanIndianSymbol).filter(Boolean);
   if (cleaned.length === 0) return [];
@@ -122,13 +148,7 @@ export async function quotes(symbols: string[]): Promise<yahoo.Quote[]> {
   const bySymbol = new Map<string, yahoo.Quote>();
 
   try {
-    const res = await fetch("https://scanner.tradingview.com/india/scan", {
-      method: "POST",
-      headers: TV_HEADERS,
-      body: JSON.stringify({ symbols: { tickers }, columns: QUOTE_COLUMNS }),
-    });
-    if (res.ok) {
-      const json = await res.json();
+    const json = await tvIndiaPost({ symbols: { tickers }, columns: QUOTE_COLUMNS });
       const rows: Array<{ s: string; d: any[] }> = json?.data ?? [];
       for (const row of rows) {
         const [
@@ -193,7 +213,6 @@ export async function quotes(symbols: string[]): Promise<yahoo.Quote[]> {
           } as yahoo.Quote);
         }
       }
-    }
   } catch {
     // Fall through to Yahoo fallback for missing tickers
   }
@@ -291,6 +310,7 @@ async function moneycontrolHistory(symbol: string, mcRes: string, lookbackSec: n
   )}&resolution=${encodeURIComponent(mcRes)}&from=${from}&to=${to}&countback=1000`;
   const res = await fetch(url, {
     headers: { "User-Agent": UA, Accept: "application/json", Referer: "https://www.moneycontrol.com/" },
+    signal: AbortSignal.timeout(4_000),
   });
   if (!res.ok) return [];
   const json: any = await res.json();
@@ -309,8 +329,10 @@ async function moneycontrolHistory(symbol: string, mcRes: string, lookbackSec: n
 }
 
 export async function history(symbol: string, rangeKey = "6M", intervalKey?: string): Promise<yahoo.Candle[]> {
-  // Ensure scrip master cache is warm before resolving numeric BSE codes
-  await indiaScrips.resolveScrip(symbol).catch(() => null);
+  // Only block on scrip master download for numeric BSE codes; alphanumeric NSE tickers resolve synchronously
+  if (/^\d{5,6}$/.test(cleanIndianSymbol(symbol).replace(/^BSE:/, ""))) {
+    await indiaScrips.resolveScrip(symbol).catch(() => null);
+  }
   const ivCfg = intervalKey ? INTERVAL_MAP[intervalKey] : undefined;
   const rCfg = RANGE_MAP[rangeKey] ?? RANGE_MAP["6M"];
 
@@ -372,18 +394,12 @@ export async function marketScan(limit = 5000, exchangeFilter: "NSE" | "BSE" | "
     filter.push({ left: "exchange", operation: "equal", right: exchangeFilter });
   }
 
-  const res = await fetch("https://scanner.tradingview.com/india/scan", {
-    method: "POST",
-    headers: TV_HEADERS,
-    body: JSON.stringify({
-      columns: ["description", "close", "change", "market_cap_basic", "sector", "volume", "exchange"],
-      filter,
-      sort: { sortBy: "market_cap_basic", sortOrder: "desc" },
-      range: [0, limit],
-    }),
+  const json = await tvIndiaPost({
+    columns: ["description", "close", "change", "market_cap_basic", "sector", "volume", "exchange"],
+    filter,
+    sort: { sortBy: "market_cap_basic", sortOrder: "desc" },
+    range: [0, limit],
   });
-  if (!res.ok) throw new Error(`tradingview india scan ${res.status}`);
-  const json = await res.json();
   const rows: Array<{ s: string; d: any[] }> = json?.data ?? [];
   return rows
     .map((r) => {
@@ -487,16 +503,10 @@ export async function earningsCalendar(symbols: string[]): Promise<IndianEarning
   const cleaned = symbols.map(cleanIndianSymbol).filter(Boolean);
   if (cleaned.length === 0) return [];
   const tickers = cleaned.flatMap((s) => tvTickersForSymbol(s));
-  const res = await fetch("https://scanner.tradingview.com/india/scan", {
-    method: "POST",
-    headers: TV_HEADERS,
-    body: JSON.stringify({
-      symbols: { tickers },
-      columns: ["earnings_release_next_date", "earnings_release_date", "earnings_per_share_forecast_next_fq"],
-    }),
+  const json = await tvIndiaPost({
+    symbols: { tickers },
+    columns: ["earnings_release_next_date", "earnings_release_date", "earnings_per_share_forecast_next_fq"],
   });
-  if (!res.ok) throw new Error(`tradingview india earnings ${res.status}`);
-  const json = await res.json();
   const rows: Array<{ s: string; d: (number | null)[] }> = json?.data ?? [];
 
   const bySymbol = new Map<string, IndianEarningsInfo>();

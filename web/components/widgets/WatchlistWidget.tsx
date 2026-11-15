@@ -75,12 +75,17 @@ function MiniFastChart({ symbol, liveTick }: { symbol: string; liveTick?: Quote 
     });
     chartRef.current = chart;
 
+    let rafId = 0;
     const ro = new ResizeObserver(() => {
-      if (el) chart.resize(el.clientWidth, el.clientHeight);
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() => {
+        if (el && chartRef.current) chart.resize(el.clientWidth, el.clientHeight);
+      });
     });
     ro.observe(el);
 
     return () => {
+      if (rafId) cancelAnimationFrame(rafId);
       ro.disconnect();
       chart.remove();
       chartRef.current = null;

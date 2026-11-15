@@ -172,7 +172,8 @@ export default function ChartWidget({ widget }: { widget: WidgetInstance }) {
       crosshair: { mode: 0 },
       timeScale: { borderColor: "#262626", timeVisible: isIntraday, secondsVisible: false },
       rightPriceScale: { borderColor: "#262626" },
-      autoSize: true,
+      width: el.clientWidth || undefined,
+      height: el.clientHeight || undefined,
       handleScroll: { mouseWheel: false, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: true },
       handleScale: { mouseWheel: false, pinch: true, axisPressedMouseMove: true },
     });
@@ -273,7 +274,21 @@ export default function ChartWidget({ widget }: { widget: WidgetInstance }) {
     });
 
     chart.timeScale().fitContent();
+
+    let rafId = 0;
+    const ro = new ResizeObserver(() => {
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() => {
+        if (el && chartRef.current && el.clientWidth > 0 && el.clientHeight > 0) {
+          chart.resize(el.clientWidth, el.clientHeight);
+        }
+      });
+    });
+    ro.observe(el);
+
     return () => {
+      if (rafId) cancelAnimationFrame(rafId);
+      ro.disconnect();
       mainSeriesRef.current = null;
       chart.remove();
       chartRef.current = null;

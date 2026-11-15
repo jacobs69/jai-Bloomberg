@@ -13,13 +13,15 @@ const UA_POOL = [
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:140.0) Gecko/20100101 Firefox/140.0",
 ];
 
-function selectUserAgent(): string {
-  const pinned = process.env.YAHOO_USER_AGENT?.trim();
-  if (pinned) return pinned;
-  return UA_POOL[Math.floor(Math.random() * UA_POOL.length)];
+let uaIndex = Math.floor(Math.random() * UA_POOL.length);
+function currentUA(): string {
+  return process.env.YAHOO_USER_AGENT?.trim() || UA_POOL[uaIndex % UA_POOL.length];
 }
-
-const UA = selectUserAgent();
+function rotateUA(): void {
+  if (!process.env.YAHOO_USER_AGENT?.trim()) {
+    uaIndex = (uaIndex + 1) % UA_POOL.length;
+  }
+}
 
 export type Quote = {
   symbol: string;
@@ -57,22 +59,31 @@ export type Candle = { time: number; open: number; high: number; low: number; cl
 let session: { cookie: string; crumb: string; fetched: number } | null = null;
 let sessionFailedUntil = 0;
 
-async function getSession(): Promise<{ cookie: string; crumb: string }> {
-  if (session && Date.now() - session.fetched < 30 * 60 * 1000) return session;
+async function getSession(): Promise<{ cookie: string; crumb: string; ua: string }> {
+  if (session && Date.now() - session.fetched < 30 * 60 * 1000) {
+    return { cookie: session.cookie, crumb: session.crumb, ua: currentUA() };
+  }
   if (Date.now() < sessionFailedUntil) throw new Error("yahoo: crumb fetch failed (cached failure)");
+  const ua = currentUA();
   try {
-    const res = await fetch("https://fc.yahoo.com/", { headers: { "User-Agent": UA }, redirect: "manual" });
+    const res = await fetch("https://fc.yahoo.com/", {
+      headers: { "User-Agent": ua },
+      redirect: "manual",
+      signal: AbortSignal.timeout(6_000),
+    });
     const cookie = (res.headers.get("set-cookie") ?? "").split(";")[0];
     if (!cookie) throw new Error("yahoo: no session cookie");
     const crumbRes = await fetch("https://query2.finance.yahoo.com/v1/test/getcrumb", {
-      headers: { "User-Agent": UA, Cookie: cookie },
+      headers: { "User-Agent": ua, Cookie: cookie },
+      signal: AbortSignal.timeout(6_000),
     });
     const crumb = (await crumbRes.text()).trim();
     if (!crumbRes.ok || !crumb || crumb.includes("<")) throw new Error("yahoo: crumb fetch failed");
     session = { cookie, crumb, fetched: Date.now() };
-    return session;
+    return { cookie, crumb, ua };
   } catch (err) {
-    sessionFailedUntil = Date.now() + 60_000;
+    rotateUA();
+    sessionFailedUntil = Date.now() + 15_000;
     throw err;
   }
 }
@@ -107,24 +118,31 @@ function release(): void {
   waiters.shift()?.();
 }
 
-async function yfetch(url: string, withCrumb = false): Promise<any> {
+async function yfetch(url: string, withCrumb = false, init?: RequestInit): Promise<any> {
   if (Date.now() < cooldownUntil) {
     throw new Error("yahoo rate-limited (cooling down)");
   }
-  const headers: Record<string, string> = { "User-Agent": UA, Accept: "application/json" };
+  const headers: Record<string, string> = { "User-Agent": currentUA(), Accept: "application/json" };
   let full = url;
   await acquire();
   try {
     if (withCrumb) {
       const s = await getSession();
+      headers["User-Agent"] = s.ua;
       headers.Cookie = s.cookie;
       full += (url.includes("?") ? "&" : "?") + "crumb=" + encodeURIComponent(s.crumb);
     }
-    const res = await fetch(full, { headers });
+    const res = await fetch(full, {
+      ...init,
+      headers: { ...headers, ...(init?.headers as Record<string, string> | undefined) },
+      signal: AbortSignal.timeout(8_000),
+    });
     if (!res.ok) {
       if (res.status === 429) {
         consecutive429s++;
-        cooldownUntil = Date.now() + Math.min(30_000 * consecutive429s, 5 * 60_000);
+        rotateUA();
+        session = null;
+        cooldownUntil = Date.now() + Math.min(10_000 * consecutive429s, 60_000);
       }
       if (withCrumb && (res.status === 401 || res.status === 403)) session = null;
       throw new Error(`yahoo ${res.status} for ${url}`);
@@ -283,4 +301,144 @@ export async function options(symbol: string, date?: number): Promise<any> {
     puts: (chain.puts ?? []).map(pick),
   };
 }
+
+// ---- holders / ownership summary (HDS) ----
+
+export async function holdersSummary(symbol: string): Promise<any> {
+  const modules = [
+    "majorHoldersBreakdown",
+    "institutionOwnership",
+    "fundOwnership",
+    "insiderHolders",
+    "netSharePurchaseActivity",
+    "price",
+  ].join(",");
+  const url = `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(symbol)}?modules=${modules}`;
+  const json = await yfetch(url, true);
+  return json?.quoteSummary?.result?.[0] ?? null;
+}
+
+export type ScreenerMarketRow = {
+  symbol: string;
+  name: string;
+  price: number | null;
+  changePercent: number | null;
+  volume: number | null;
+  marketCap: number | null;
+  sector: string;
+  exchange: string;
+  country?: string;
+  currency?: string;
+};
+
+async function yahooScreenerQuery(
+  region: string,
+  size: number,
+  extraOperands: any[] = []
+): Promise<any[]> {
+  const body = {
+    size: Math.min(250, size),
+    offset: 0,
+    sortField: "intradaymarketcap",
+    sortType: "DESC",
+    quoteType: "EQUITY",
+    query: {
+      operator: "AND",
+      operands: [{ operator: "EQ", operands: ["region", region] }, ...extraOperands],
+    },
+  };
+  const json = await yfetch("https://query2.finance.yahoo.com/v1/finance/screener", true, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return json?.finance?.result?.[0]?.quotes ?? [];
+}
+
+function mapYahooScreenerRow(q: any, isIndia: boolean): ScreenerMarketRow {
+  const rawSym = String(q.symbol ?? "");
+  const isBse = rawSym.endsWith(".BO") || q.exchange === "BSE" || q.exchange === "BOM";
+  const bare = rawSym.replace(/\.[A-Z]{1,4}$/, "");
+  const symbol = isIndia ? (isBse ? `BSE:${bare}` : bare) : bare || rawSym;
+  const exchName = String(q.fullExchangeName ?? q.exchange ?? "");
+  return {
+    symbol,
+    name: String(q.longName ?? q.shortName ?? symbol),
+    price: n(q.regularMarketPrice),
+    changePercent: n(q.regularMarketChangePercent),
+    volume: n(q.regularMarketVolume),
+    marketCap: n(q.marketCap),
+    sector: String(q.sector ?? q.sectorDisp ?? (exchName ? `${exchName} Equities` : "Equities")),
+    exchange: isIndia ? (isBse ? "BSE" : "NSE") : exchName,
+    currency: q.currency ? String(q.currency) : undefined,
+  };
+}
+
+export async function marketScan(
+  region: string,
+  opts?: { exchange?: "NSE" | "BSE" },
+  limit = 250
+): Promise<ScreenerMarketRow[]> {
+  const isIndia = region.toLowerCase() === "in";
+  const extraOperands: any[] = [];
+  if (opts?.exchange === "NSE") {
+    extraOperands.push({ operator: "EQ", operands: ["exchange", "NSI"] });
+  } else if (opts?.exchange === "BSE") {
+    extraOperands.push({
+      operator: "OR",
+      operands: [
+        { operator: "EQ", operands: ["exchange", "BOM"] },
+        { operator: "EQ", operands: ["exchange", "BSE"] },
+      ],
+    });
+  }
+  const quotesList = await yahooScreenerQuery(region, limit, extraOperands);
+  if (quotesList.length === 0) throw new Error(`yahoo screener empty for region=${region}`);
+  const bySym = new Map<string, ScreenerMarketRow>();
+  for (const q of quotesList) {
+    const mapped = mapYahooScreenerRow(q, isIndia);
+    if (!mapped.symbol) continue;
+    const prev = bySym.get(mapped.symbol);
+    if (!prev || (mapped.marketCap ?? 0) > (prev.marketCap ?? 0)) {
+      bySym.set(mapped.symbol, mapped);
+    }
+  }
+  return [...bySym.values()];
+}
+
+const EU_PRIMARY_MARKETS: ReadonlyArray<{ region: string; exchange: string }> = [
+  { region: "gb", exchange: "LSE" },
+  { region: "de", exchange: "GER" },
+  { region: "fr", exchange: "PAR" },
+  { region: "ch", exchange: "EBS" },
+  { region: "nl", exchange: "AMS" },
+  { region: "it", exchange: "MIL" },
+  { region: "es", exchange: "MCE" },
+  { region: "se", exchange: "STO" },
+];
+
+export async function europeMarketScan(limit = 400): Promise<ScreenerMarketRow[]> {
+  const results = await Promise.allSettled(
+    EU_PRIMARY_MARKETS.map(({ region, exchange }) =>
+      yahooScreenerQuery(region, 60, [{ operator: "EQ", operands: ["exchange", exchange] }])
+    )
+  );
+  const bySym = new Map<string, ScreenerMarketRow>();
+  for (const r of results) {
+    if (r.status !== "fulfilled") continue;
+    for (const q of r.value) {
+      const mapped = mapYahooScreenerRow(q, false);
+      if (!mapped.symbol) continue;
+      const key = mapped.symbol.toUpperCase();
+      const prev = bySym.get(key);
+      if (!prev || (mapped.marketCap ?? 0) > (prev.marketCap ?? 0)) {
+        bySym.set(key, mapped);
+      }
+    }
+  }
+  const rows = [...bySym.values()];
+  if (rows.length === 0) throw new Error("yahoo europe screener empty");
+  return rows.sort((a, b) => (b.marketCap ?? 0) - (a.marketCap ?? 0)).slice(0, limit);
+}
+
 

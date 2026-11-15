@@ -67,7 +67,7 @@ export default function TopBar() {
 
   return (
     <header className="flex items-center gap-4 px-3 h-8 bg-[var(--panel-2)] border-b border-[var(--border)] text-[11px] shrink-0">
-      <span className="amber font-bold tracking-widest">OPENTERMINAL · INDIA</span>
+      <span className="amber font-bold tracking-widest">MARKETFORGE · INDIA</span>
       {market && <span className={market.open ? "up" : "down"}>● {market.label}</span>}
       <Clock tz="Asia/Kolkata" label="IST" />
       <Clock tz="Asia/Singapore" label="SGP" />
@@ -101,6 +101,32 @@ export default function TopBar() {
           ● NEWS (+{newsUnread})
         </button>
       )}
+      <button
+        type="button"
+        onClick={() => {
+          addOrFocusWidget("hds");
+          setTimeout(() => {
+            document.querySelector('[data-widget-type="hds"]')?.scrollIntoView({ behavior: "smooth", block: "center" });
+          }, 60);
+        }}
+        className="term-btn"
+        title="Open HDS Shareholder Analysis for active symbol (Alt+H)"
+      >
+        HDS
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          addOrFocusWidget("tankers");
+          setTimeout(() => {
+            document.querySelector('[data-widget-type="tankers"]')?.scrollIntoView({ behavior: "smooth", block: "center" });
+          }, 60);
+        }}
+        className="term-btn"
+        title="Track global oil, product & LNG tankers live via TankerMap (Alt+T)"
+      >
+        TANKERS
+      </button>
       <button
         type="button"
         onClick={() => {

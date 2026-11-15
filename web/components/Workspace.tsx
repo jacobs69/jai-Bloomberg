@@ -24,6 +24,8 @@ import TvWidget from "./widgets/TvWidget";
 import RecapWidget from "./widgets/RecapWidget";
 import IpoWidget from "./widgets/IpoWidget";
 import CubePlusWidget from "./widgets/CubePlusWidget";
+import HdsWidget from "./widgets/HdsWidget";
+import TankerMapWidget from "./widgets/TankerMapWidget";
 import WidgetErrorBoundary from "./WidgetErrorBoundary";
 
 const Grid = WidthProvider(GridLayout);
@@ -47,6 +49,8 @@ function WidgetBody({ widget }: { widget: WidgetInstance }) {
     case "recap": return <RecapWidget />;
     case "ipo": return <IpoWidget />;
     case "cubeplus": return <CubePlusWidget />;
+    case "hds": return <HdsWidget widget={widget} />;
+    case "tankers": return <TankerMapWidget />;
   }
 }
 
@@ -102,6 +106,8 @@ const TITLES: Record<string, string> = {
   macro: "Macro / Indexes", options: "Option Chain", portfolio: "Portfolio", ai: "AI Assistant",
   calendar: "Calendar", insider: "Insider Transactions", tv: "Live TV", recap: "Market Recap", ipo: "IPO Tracker",
   cubeplus: "Tradejini CubePlus",
+  hds: "HDS · Shareholders",
+  tankers: "Oil Tanker Map (TankerMap)",
 };
 
 export default function Workspace() {
@@ -113,7 +119,7 @@ export default function Workspace() {
   const activeSymbol = useTerminal((s) => s.activeSymbol);
   const newsUnread = useNewsAlert((s) => s.unreadCount);
 
-  const symbolAware = new Set(["quote", "chart", "news", "options", "insider"]);
+  const symbolAware = new Set(["quote", "chart", "news", "options", "insider", "hds"]);
 
   return (
     <Grid

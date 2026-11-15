@@ -64,8 +64,8 @@ export default function CryptoWidget() {
           <tr><th>#</th><th>Asset</th><th>Price</th><th>24h%</th><th>MCap</th><th>Vol 24h</th><th>7d</th></tr>
         </thead>
         <tbody>
-          {data.map((c) => (
-            <tr key={c.id} onClick={() => setActiveSymbol(c.symbol)}>
+          {data.map((c, idx) => (
+            <tr key={`${c.id}-${idx}`} onClick={() => setActiveSymbol(c.symbol)}>
               <td className="dim">{c.rank ?? "—"}</td>
               <td className="!text-left"><span className="font-bold">{c.symbol}</span> <span className="dim">{c.name}</span></td>
               <td><Flash value={c.price}>{fmtPrice(c.price)}</Flash></td>

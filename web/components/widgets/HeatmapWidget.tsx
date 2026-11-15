@@ -15,20 +15,38 @@ export default function HeatmapWidget() {
   const { data, error } = useQuery({
     queryKey: ["heatmap", market],
     queryFn: () => apiGet<Cell[]>(`/api/heatmap?market=${market}`),
-    refetchInterval: 3_000,
+    refetchInterval: 30_000,
   });
 
   useEffect(() => {
     const el = ref.current;
-    if (!el || !data) return;
+    if (!el) return;
+    if (!data) {
+      el.replaceChildren();
+      return;
+    }
+
+    let rafId = 0;
 
     const render = () => {
+      if (!ref.current) return;
       const width = el.clientWidth;
       const height = el.clientHeight;
       if (width === 0 || height === 0) return;
-      el.innerHTML = "";
+      el.replaceChildren();
 
-      const valid = data.filter((d) => d.marketCap && d.changePercent !== null);
+      // Deduplicate by symbol (EU/BSE feeds can emit same ticker across exchanges)
+      const bySym = new Map<string, Cell>();
+      for (const d of data) {
+        if (!d.marketCap || d.changePercent === null) continue;
+        const prev = bySym.get(d.symbol);
+        if (!prev || (d.marketCap ?? 0) > (prev.marketCap ?? 0)) {
+          bySym.set(d.symbol, d);
+        }
+      }
+      const valid = [...bySym.values()];
+      if (valid.length === 0) return;
+
       type Node = { name: string; children?: Node[]; data?: Cell };
       const root = d3
         .hierarchy<Node>({
@@ -52,9 +70,8 @@ export default function HeatmapWidget() {
 
       const svg = d3.select(el).append("svg").attr("width", width).attr("height", height);
 
-      // Clip each sector label to its own column so long names never bleed
-      // into the neighboring sector (the visible cause of overlapping text).
-      const sectorClipId = (name: string) => `sector-clip-${name.replace(/[^a-zA-Z0-9]/g, "")}`;
+      const sectorClipId = (name: string) =>
+        `sector-clip-${market}-${name.replace(/[^a-zA-Z0-9]/g, "")}`;
 
       svg
         .selectAll("clipPath.sector-clip")
@@ -117,11 +134,20 @@ export default function HeatmapWidget() {
         .text((d: any) => `${d.data.data.changePercent >= 0 ? "+" : ""}${d.data.data.changePercent.toFixed(2)}%`);
     };
 
+    const scheduleRender = () => {
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(render);
+    };
+
     render();
-    const obs = new ResizeObserver(render);
+    const obs = new ResizeObserver(scheduleRender);
     obs.observe(el);
-    return () => obs.disconnect();
-  }, [data, setActiveSymbol]);
+    return () => {
+      if (rafId) cancelAnimationFrame(rafId);
+      obs.disconnect();
+      el.replaceChildren();
+    };
+  }, [data, market, setActiveSymbol]);
 
   return (
     <div className="flex flex-col h-full">
@@ -139,13 +165,17 @@ export default function HeatmapWidget() {
           </button>
         ))}
       </div>
-      <div className="flex-1 min-h-0">
-        {error ? (
-          <div className="p-2 down">Error: {(error as Error).message}</div>
-        ) : !data ? (
-          <div className="p-2 dim">Loading heatmap…</div>
-        ) : (
-          <div ref={ref} className="w-full h-full" />
+      <div className="flex-1 min-h-0 relative">
+        <div ref={ref} className="w-full h-full" />
+        {error && (
+          <div className="absolute inset-0 p-2 down bg-[var(--panel)]">
+            Error: {(error as Error).message}
+          </div>
+        )}
+        {!error && !data && (
+          <div className="absolute inset-0 p-2 dim bg-[var(--panel)]">
+            Loading heatmap…
+          </div>
         )}
       </div>
     </div>

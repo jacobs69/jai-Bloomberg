@@ -31,6 +31,8 @@ export default function Terminal() {
           "9": () => addWidget("ai"),
           "0": () => addWidget("ipo"),
           b: () => addWidget("cubeplus"),
+          h: () => addWidget("hds"),
+          t: () => addWidget("tankers"),
         };
         const fn = map[e.key];
         if (fn) {

@@ -87,20 +87,40 @@ export type MarketRow = {
   currency?: string;
 };
 
+const TV_COOLDOWN_MS = 60_000;
+let tvCooldownUntil = 0;
+
+async function tvPost(url: string, body: unknown): Promise<Response> {
+  if (Date.now() < tvCooldownUntil) {
+    throw new Error("tradingview rate-limited / unreachable (cooling down)");
+  }
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: HEADERS,
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(4_500),
+    });
+    if (res.status === 429) {
+      tvCooldownUntil = Date.now() + TV_COOLDOWN_MS;
+    }
+    return res;
+  } catch (err) {
+    tvCooldownUntil = Date.now() + TV_COOLDOWN_MS;
+    throw err;
+  }
+}
+
 /** Live top-N-by-market-cap snapshot across every US exchange, one request. */
 export async function marketScan(limit = 1500): Promise<MarketRow[]> {
-  const res = await fetch("https://scanner.tradingview.com/america/scan", {
-    method: "POST",
-    headers: HEADERS,
-    body: JSON.stringify({
-      columns: ["description", "close", "change", "market_cap_basic", "sector", "volume", "exchange"],
-      filter: [
-        { left: "type", operation: "equal", right: "stock" },
-        { left: "typespecs", operation: "has", right: ["common"] },
-      ],
-      sort: { sortBy: "market_cap_basic", sortOrder: "desc" },
-      range: [0, limit],
-    }),
+  const res = await tvPost("https://scanner.tradingview.com/america/scan", {
+    columns: ["description", "close", "change", "market_cap_basic", "sector", "volume", "exchange"],
+    filter: [
+      { left: "type", operation: "equal", right: "stock" },
+      { left: "typespecs", operation: "has", right: ["common"] },
+    ],
+    sort: { sortBy: "market_cap_basic", sortOrder: "desc" },
+    range: [0, limit],
   });
   if (!res.ok) throw new Error(`tradingview scan ${res.status}`);
   const json = await res.json();
@@ -150,6 +170,7 @@ async function scanOneEuropeMarket(
   const res = await fetch(`https://scanner.tradingview.com/${m.region}/scan`, {
     method: "POST",
     headers: HEADERS,
+    signal: AbortSignal.timeout(4_500),
     body: JSON.stringify({
       // fundamental_currency_code (not "currency"!) is what market_cap_basic
       // is denominated in — for UK listings "currency" is GBX (pence, the
@@ -193,9 +214,16 @@ async function scanOneEuropeMarket(
  * in one market doesn't take down the rest (Promise.allSettled).
  */
 export async function europeMarketScan(limit = 1500): Promise<MarketRow[]> {
+  if (Date.now() < tvCooldownUntil) {
+    throw new Error("tradingview europe rate-limited / unreachable (cooling down)");
+  }
   const perMarket = 300;
   const results = await Promise.allSettled(EUROPE_MARKETS.map((m) => scanOneEuropeMarket(m, perMarket)));
   const rows = results.flatMap((r) => (r.status === "fulfilled" ? r.value : []));
+  if (rows.length === 0) {
+    tvCooldownUntil = Date.now() + TV_COOLDOWN_MS;
+    throw new Error("tradingview europe scan returned no rows");
+  }
   return rows.sort((a, b) => (b.marketCap ?? 0) - (a.marketCap ?? 0)).slice(0, limit);
 }
 

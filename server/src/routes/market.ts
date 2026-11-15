@@ -14,6 +14,7 @@ import * as indianNews from "../providers/indianNews.js";
 import * as econcalendar from "../providers/econcalendar.js";
 import * as finra from "../providers/finra.js";
 import * as secedgar from "../providers/secedgar.js";
+import * as holders from "../providers/holders.js";
 
 export const marketRouter: ExpressRouter = Router();
 
@@ -233,8 +234,9 @@ marketRouter.get("/history/:symbol", async (req, res) => {
   const rangeKey = String(req.query.range ?? "6M");
   const intervalKey = req.query.interval ? String(req.query.interval) : undefined;
   const ttl = intervalKey && ["1m", "3m", "5m"].includes(intervalKey) ? 5_000 : HISTORY_TTL;
+  const cacheKey = `history:${symbol}:${rangeKey}:${intervalKey ?? "auto"}`;
   try {
-    const data = await cached(`history:${symbol}:${rangeKey}:${intervalKey ?? "auto"}`, ttl, () =>
+    const data = await cached(cacheKey, ttl, () =>
       binance.CRYPTO_SYMBOLS.has(symbol)
         ? binance.history(symbol, rangeKey)
         : isVix(symbol)
@@ -247,12 +249,14 @@ marketRouter.get("/history/:symbol", async (req, res) => {
           ])
         : withFallback([
             ["india", () => india.history(symbol, rangeKey, intervalKey)],
-            ["yahoo", () => yahoo.history(symbol, yahooRange(rangeKey).range, yahooRange(rangeKey).interval)],
+            ["yahoo", () => yahoo.history(india.toYahooIndianSymbol(symbol), yahooRange(rangeKey).range, yahooRange(rangeKey).interval)],
           ])
     );
     if (!Array.isArray(data) || data.length === 0) throw new Error("empty history from all providers");
     res.json(data);
   } catch (err) {
+    const stale = staleGet<yahoo.Candle[]>(cacheKey);
+    if (stale && stale.length > 0) return res.json(stale);
     fail(req, res, err);
   }
 });
@@ -351,7 +355,7 @@ marketRouter.get("/options/:symbol", async (req, res) => {
 
 marketRouter.get("/crypto", async (req, res) => {
   try {
-    const data = await cached("crypto:markets", 5_000, () =>
+    const data = await cached("crypto:markets", 15_000, () =>
       withFallback([
         ["coingecko", () => coingecko.markets(50)],
         ["binance", () => binance.markets()],
@@ -359,17 +363,24 @@ marketRouter.get("/crypto", async (req, res) => {
     );
     res.json(data);
   } catch (err) {
+    const stale = staleGet("crypto:markets");
+    if (stale) return res.json(stale);
     fail(req, res, err);
   }
 });
 
 marketRouter.get("/crypto/global", async (req, res) => {
   try {
-    const data = await cached("crypto:global", 120_000, () =>
-      withFallback([["coingecko", () => coingecko.globalStats()]])
+    const data = await cached("crypto:global", 300_000, () =>
+      withFallback([
+        ["coingecko", () => coingecko.globalStats()],
+        ["coinpaprika", () => coingecko.coinpaprikaGlobalStats()],
+      ])
     );
     res.json(data);
   } catch (err) {
+    const stale = staleGet("crypto:global");
+    if (stale) return res.json(stale);
     fail(req, res, err);
   }
 });
@@ -566,23 +577,67 @@ async function eurFxRates(): Promise<Record<string, number>> {
   return rates;
 }
 
+const MARKET_SCAN_TTL = 60_000;
+
+function dedupeBySymbol(rows: tradingview.MarketRow[]): tradingview.MarketRow[] {
+  const bySym = new Map<string, tradingview.MarketRow>();
+  for (const r of rows) {
+    const key = r.symbol.toUpperCase();
+    const prev = bySym.get(key);
+    if (!prev || (r.marketCap ?? 0) > (prev.marketCap ?? 0)) {
+      bySym.set(key, r);
+    }
+  }
+  return [...bySym.values()];
+}
+
 async function marketRows(market: MarketCode): Promise<tradingview.MarketRow[]> {
   if (market === "in") {
-    return cached("marketscan:in:nse", 3_000, () => india.marketScan(5000, "NSE"));
+    return cached("marketscan:in:nse", MARKET_SCAN_TTL, async () =>
+      dedupeBySymbol(
+        await withFallback<tradingview.MarketRow[]>([
+          ["tradingview", () => india.marketScan(5000, "NSE")],
+          ["yahoo", () => yahoo.marketScan("in", { exchange: "NSE" }, 250)],
+        ])
+      )
+    );
   }
   if (market === "bse") {
-    return cached("marketscan:in:bse", 3_000, () => india.marketScan(5000, "BSE"));
+    return cached("marketscan:in:bse", MARKET_SCAN_TTL, async () =>
+      dedupeBySymbol(
+        await withFallback<tradingview.MarketRow[]>([
+          ["tradingview", () => india.marketScan(5000, "BSE")],
+          ["yahoo", () => yahoo.marketScan("in", { exchange: "BSE" }, 250)],
+        ])
+      )
+    );
   }
   if (market === "eu") {
-    return cached("marketscan:eu", 5_000, async () => {
-      const [rows, fx] = await Promise.all([tradingview.europeMarketScan(1500), eurFxRates()]);
-      return rows.map((r) => {
-        const rate = r.currency ? fx[r.currency] : undefined;
-        return rate && r.marketCap ? { ...r, marketCap: r.marketCap / rate } : r;
-      });
+    return cached("marketscan:eu", MARKET_SCAN_TTL, async () => {
+      const [rows, fx] = await Promise.all([
+        withFallback<tradingview.MarketRow[]>([
+          ["tradingview", () => tradingview.europeMarketScan(1500)],
+          ["yahoo", () => yahoo.europeMarketScan(400)],
+        ]),
+        eurFxRates(),
+      ]);
+      return dedupeBySymbol(
+        rows.map((r) => {
+          const rate = r.currency ? fx[r.currency] : undefined;
+          return rate && r.marketCap ? { ...r, marketCap: r.marketCap / rate } : r;
+        })
+      );
     });
   }
-  return cached("marketscan:full", 3_000, () => tradingview.marketScan(1500));
+  return cached("marketscan:full", MARKET_SCAN_TTL, async () =>
+    dedupeBySymbol(
+      await withFallback<tradingview.MarketRow[]>([
+        ["tradingview", () => tradingview.marketScan(1500)],
+        ["nasdaq", () => nasdaq.marketScan(1500)],
+        ["yahoo", () => yahoo.marketScan("us", undefined, 250)],
+      ])
+    )
+  );
 }
 
 marketRouter.get("/heatmap", async (req, res) => {
@@ -835,3 +890,20 @@ marketRouter.get("/insider/:symbol", async (req, res) => {
     res.json([]);
   }
 });
+
+// ---- HDS: Shareholding pattern & top holders (Screener.in, Yahoo Finance, BSE, SEC EDGAR) ----
+
+async function handleHolders(req: any, res: any) {
+  const symbol = String(req.params.symbol ?? "").trim().toUpperCase();
+  if (!symbol) return res.status(400).json({ error: "symbol required" });
+  try {
+    const data = await cached(`hds:${symbol}`, 900_000, () => holders.getHoldersReport(symbol));
+    res.json(data);
+  } catch (err) {
+    fail(req, res, err);
+  }
+}
+
+marketRouter.get("/holders/:symbol", handleHolders);
+marketRouter.get("/hds/:symbol", handleHolders);
+

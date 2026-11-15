@@ -185,3 +185,42 @@ button.term-btn.active {
 .react-grid-item > .react-resizable-handle::after {
   border-color: var(--amber-dim) !important;
 }
+
+.leaflet-container {
+  background: #06090e !important;
+  font-family: inherit !important;
+}
+.leaflet-control-zoom a {
+  background: var(--panel-2) !important;
+  color: var(--amber) !important;
+  border-color: var(--border) !important;
+}
+.leaflet-control-zoom a:hover {
+  background: #1c1c1c !important;
+  color: #ffffff !important;
+}
+.leaflet-control-attribution {
+  background: rgba(10, 10, 10, 0.78) !important;
+  color: var(--text-dim) !important;
+  font-size: 9px !important;
+}
+.leaflet-control-attribution a {
+  color: var(--amber-dim) !important;
+}
+.leaflet-tooltip.tanker-tooltip {
+  background: #0c0c0c;
+  border: 1px solid var(--amber-dim);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 10px;
+  padding: 4px 6px;
+  border-radius: 2px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.75);
+}
+.leaflet-tooltip-left.tanker-tooltip::before,
+.leaflet-tooltip-right.tanker-tooltip::before,
+.leaflet-tooltip-top.tanker-tooltip::before,
+.leaflet-tooltip-bottom.tanker-tooltip::before {
+  border-color: transparent !important;
+}
+

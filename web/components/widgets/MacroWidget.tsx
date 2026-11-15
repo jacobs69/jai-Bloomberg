@@ -103,7 +103,7 @@ function MacroBody({
         )}
       </div>
       <div className="h-24 px-1">
-        <ResponsiveContainer width="100%" height="100%">
+        <ResponsiveContainer width="100%" height="100%" debounce={50}>
           <LineChart data={data.yields} margin={{ top: 4, right: 12, bottom: 0, left: -22 }}>
             <XAxis dataKey="tenor" stroke="#808080" fontSize={9} />
             <YAxis stroke="#808080" fontSize={9} domain={["auto", "auto"]} />

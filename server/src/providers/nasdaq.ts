@@ -238,4 +238,43 @@ export async function earningsSurprise(symbol: string): Promise<EarningsSurprise
     .filter((r): r is EarningsSurpriseRow => r !== null);
 }
 
+export async function marketScan(limit = 1500): Promise<Array<{
+  symbol: string;
+  name: string;
+  price: number | null;
+  changePercent: number | null;
+  volume: number | null;
+  marketCap: number | null;
+  sector: string;
+  exchange: string;
+  country?: string;
+}>> {
+  const data = await nfetch(
+    `https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=${limit}&download=true`
+  );
+  const rows: any[] = data?.rows ?? [];
+  return rows
+    .map((r) => {
+      const symbol = String(r.symbol ?? "").trim();
+      const price = money(r.lastsale);
+      const pct = typeof r.pctchange === "string" ? Number(r.pctchange.replace(/[%,+]/g, "")) : null;
+      const volume = num(String(r.volume ?? "").replace(/,/g, ""));
+      const marketCap = num(String(r.marketCap ?? "").replace(/[$,]/g, ""));
+      return {
+        symbol,
+        name: String(r.name ?? symbol),
+        price,
+        changePercent: pct !== null && isFinite(pct) ? pct : null,
+        volume,
+        marketCap,
+        sector: String(r.sector || "Other"),
+        exchange: "US",
+        country: r.country ? String(r.country) : undefined,
+      };
+    })
+    .filter((r) => r.symbol && !r.symbol.includes("^") && !r.symbol.includes("/"))
+    .sort((a, b) => (b.marketCap ?? 0) - (a.marketCap ?? 0))
+    .slice(0, limit);
+}
+
 

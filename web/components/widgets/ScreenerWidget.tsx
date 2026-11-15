@@ -120,8 +120,8 @@ export default function ScreenerWidget() {
           </tr>
         </thead>
         <tbody>
-          {data.map((q) => (
-            <tr key={q.symbol} onClick={() => setActiveSymbol(q.symbol)}>
+          {data.map((q, idx) => (
+            <tr key={`${market}-${q.symbol}-${idx}`} onClick={() => setActiveSymbol(q.symbol)}>
               <td className="font-bold">{q.symbol}</td>
               <td className="!text-left max-w-40 truncate">{q.name}</td>
               <td className="!text-left dim">{q.sector}</td>

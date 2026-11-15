@@ -4,6 +4,7 @@ import * as india from "../providers/india.js";
 import * as indiaScrips from "../providers/indiaScrips.js";
 import * as indianNews from "../providers/indianNews.js";
 import * as ipo from "../providers/ipo.js";
+import * as holders from "../providers/holders.js";
 
 export const indiaRouter: ExpressRouter = Router();
 
@@ -301,3 +302,17 @@ indiaRouter.get("/ipos/subscription", async (req, res) => {
     fail(req, res, err);
   }
 });
+
+// ---- HDS: Shareholding Pattern & Major Shareholders ----
+
+indiaRouter.get("/holders/:symbol", async (req, res) => {
+  const symbol = String(req.params.symbol ?? "").trim().toUpperCase();
+  if (!symbol) return res.status(400).json({ error: "symbol required" });
+  try {
+    const data = await cached(`hds:${symbol}`, 900_000, () => holders.getHoldersReport(symbol));
+    res.json(data);
+  } catch (err) {
+    fail(req, res, err);
+  }
+});
+

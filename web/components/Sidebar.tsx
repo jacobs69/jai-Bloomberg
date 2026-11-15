@@ -17,6 +17,8 @@ const ITEMS: Array<{ type: WidgetType; label: string; key: string }> = [
   { type: "macro", label: "MACRO", key: "" },
   { type: "calendar", label: "CALENDAR", key: "" },
   { type: "insider", label: "INSIDER", key: "" },
+  { type: "hds", label: "HDS HOLDERS", key: "⌥H" },
+  { type: "tankers", label: "OIL TANKERS", key: "⌥T" },
   { type: "tv", label: "LIVE TV", key: "" },
   { type: "cubeplus", label: "CUBEPLUS", key: "⌥B" },
   { type: "recap", label: "MARKET RECAP", key: "" },

@@ -6,6 +6,7 @@ import { portfolioRouter } from "./routes/portfolio.js";
 import { aiRouter } from "./routes/ai.js";
 import { tradejiniRouter } from "./routes/tradejini.js";
 import { tvRouter } from "./routes/tv.js";
+import { tankersRouter } from "./routes/tankers.js";
 import { allStats } from "./providers/registry.js";
 import { requireApiKey } from "./auth.js";
 import { rateLimit } from "./rateLimit.js";
@@ -24,6 +25,7 @@ export function createApp(): Express {
   app.use("/api/india", rateLimit({ windowMs: 60_000, max: 240 }), indiaRouter);
   app.use("/api/tradejini", rateLimit({ windowMs: 60_000, max: 120 }), tradejiniRouter);
   app.use("/api/tv", tvRouter);
+  app.use("/api/tankers", rateLimit({ windowMs: 60_000, max: 120 }), tankersRouter);
   app.use("/api", rateLimit({ windowMs: 60_000, max: 240 }), marketRouter);
   app.use("/api/portfolios", requireApiKey, portfolioRouter);
   app.use(

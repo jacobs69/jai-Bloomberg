@@ -3,8 +3,8 @@ import "./globals.css";
 import Providers from "./providers";
 
 export const metadata: Metadata = {
-  title: "OpenTerminal India",
-  description: "Bloomberg-style Indian financial terminal for NSE, BSE, IPOs, and Indian market news",
+  title: "MARKETFORGE · India Market Terminal",
+  description: "MARKETFORGE Bloomberg-style financial terminal for NSE, BSE, HDS shareholders, IPOs, CubePlus, and real-time market news",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
