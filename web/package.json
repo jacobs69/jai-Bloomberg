@@ -19,7 +19,6 @@
     "react-grid-layout": "^1.5.0",
     "react-resizable": "^3.0.5",
     "recharts": "^2.15.0",
-    "server": "*",
     "zustand": "^5.0.3"
   },
   "devDependencies": {
