@@ -1,32 +1,22 @@
-import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import { NextRequest, NextResponse } from "next/server";
 import { getApiKey } from "@/lib/api-key";
-import { createApp } from "server";
 
-const g = globalThis as typeof globalThis & {
-  __openTerminalApiUrlPromise?: Promise<string>;
-};
+function getApiBaseUrl(): string {
+  // Vercel injects API_URL from the private server-service binding at runtime.
+  // Keep a localhost fallback for the regular two-process npm run dev workflow.
+  const apiUrl =
+    process.env.API_URL ??
+    (process.env.NODE_ENV !== "production" ? "http://127.0.0.1:4000" : undefined);
 
-async function getApiBaseUrl(): Promise<string> {
-  if (process.env.API_URL) return process.env.API_URL;
-  if (!g.__openTerminalApiUrlPromise) {
-    g.__openTerminalApiUrlPromise = (async () => {
-      const app = createApp();
-      const server = createServer(app);
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(0, "127.0.0.1", () => resolve());
-      });
-      const addr = server.address() as AddressInfo;
-      return `http://127.0.0.1:${addr.port}`;
-    })();
+  if (!apiUrl) {
+    throw new Error("API_URL service binding is missing");
   }
-  return g.__openTerminalApiUrlPromise;
+
+  return apiUrl.replace(/\/+$/, "");
 }
 
 async function proxy(req: NextRequest, path: string[]): Promise<NextResponse> {
-  const apiUrl = await getApiBaseUrl();
+  const apiUrl = getApiBaseUrl();
   const url = `${apiUrl}/api/${path.join("/")}${req.nextUrl.search}`;
   const apiKey = getApiKey();
 
