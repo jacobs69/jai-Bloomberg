@@ -1,0 +1,30 @@
+[
+  {
+    "id": "ndtv",
+    "label": "NDTV Profit",
+    "url": "https://ndtvprofit.akamaized.net/hls/live/2107404/ndtvprofit/master_1.m3u8",
+    "kind": "hls",
+    "builtin": true
+  },
+  {
+    "id": "cnbc",
+    "label": "CNBC Global",
+    "url": "https://gpuserver3.tier1streams.com/CNBC/index.m3u8",
+    "kind": "hls",
+    "builtin": true
+  },
+  {
+    "id": "bloomberg",
+    "label": "Bloomberg TV",
+    "url": "https://liveprodusphoenixeast.global.ssl.fastly.net/USPhx-HD/Channel-TX-USPhx-AWS-virginia-1/Source-USPhx-16k-1-s6lk2-BP-07-02-81ykIWnsMsg_live.m3u8",
+    "kind": "hls",
+    "builtin": true
+  },
+  {
+    "id": "yahoo",
+    "label": "Yahoo Finance",
+    "url": "https://d1ewctnvcwvvvu.cloudfront.net/playlist.m3u8",
+    "kind": "hls",
+    "builtin": true
+  }
+]

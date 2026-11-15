@@ -5,6 +5,7 @@ import GridLayout, { WidthProvider } from "react-grid-layout";
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
 import { normalizeSymbol } from "../lib/symbol";
+import { useNewsAlert } from "../lib/useNewsStream";
 import { useTerminal, type WidgetInstance } from "../store/terminal";
 import QuoteWidget from "./widgets/QuoteWidget";
 import ChartWidget from "./widgets/ChartWidget";
@@ -22,6 +23,7 @@ import InsiderWidget from "./widgets/InsiderWidget";
 import TvWidget from "./widgets/TvWidget";
 import RecapWidget from "./widgets/RecapWidget";
 import IpoWidget from "./widgets/IpoWidget";
+import CubePlusWidget from "./widgets/CubePlusWidget";
 import WidgetErrorBoundary from "./WidgetErrorBoundary";
 
 const Grid = WidthProvider(GridLayout);
@@ -44,6 +46,7 @@ function WidgetBody({ widget }: { widget: WidgetInstance }) {
     case "tv": return <TvWidget />;
     case "recap": return <RecapWidget />;
     case "ipo": return <IpoWidget />;
+    case "cubeplus": return <CubePlusWidget />;
   }
 }
 
@@ -98,6 +101,7 @@ const TITLES: Record<string, string> = {
   heatmap: "Heatmap", screener: "Screener", crypto: "Crypto",
   macro: "Macro / Indexes", options: "Option Chain", portfolio: "Portfolio", ai: "AI Assistant",
   calendar: "Calendar", insider: "Insider Transactions", tv: "Live TV", recap: "Market Recap", ipo: "IPO Tracker",
+  cubeplus: "Tradejini CubePlus",
 };
 
 export default function Workspace() {
@@ -107,6 +111,7 @@ export default function Workspace() {
   const removeWidget = useTerminal((s) => s.removeWidget);
   const toggleLinked = useTerminal((s) => s.toggleLinked);
   const activeSymbol = useTerminal((s) => s.activeSymbol);
+  const newsUnread = useNewsAlert((s) => s.unreadCount);
 
   const symbolAware = new Set(["quote", "chart", "news", "options", "insider"]);
 
@@ -121,12 +126,17 @@ export default function Workspace() {
       onLayoutChange={(l) => setLayout(l.map(({ i, x, y, w, h }) => ({ i, x, y, w, h })))}
     >
       {widgets.map((w) => (
-        <div key={w.id}>
+        <div key={w.id} data-widget-type={w.type}>
           <div className="terminal-panel">
             <div className="panel-title">
-              <span>
+              <span className="flex items-center">
                 {TITLES[w.type]}
                 {symbolAware.has(w.type) && <SymbolTag widget={w} activeSymbol={activeSymbol} />}
+                {w.type === "news" && newsUnread > 0 && (
+                  <span className="news-blinker ml-2 px-1.5 py-0 text-[9px] leading-tight">
+                    ● {newsUnread} NEW
+                  </span>
+                )}
               </span>
               <span className="flex gap-2 items-center">
                 {symbolAware.has(w.type) && (

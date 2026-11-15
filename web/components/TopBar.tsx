@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { apiGet } from "../lib/api";
+import { useNewsAlert } from "../lib/useNewsStream";
 import { useTerminal } from "../store/terminal";
 
 type Status = {
@@ -40,11 +41,19 @@ function marketStateIndia(): { label: string; open: boolean } {
 
 export default function TopBar() {
   const setCommandOpen = useTerminal((s) => s.setCommandOpen);
+  const addOrFocusWidget = useTerminal((s) => s.addOrFocusWidget);
   const activeSymbol = useTerminal((s) => s.activeSymbol);
+  const newsUnread = useNewsAlert((s) => s.unreadCount);
+  const clearNewsUnread = useNewsAlert((s) => s.clearUnread);
   const [market, setMarket] = useState<{ label: string; open: boolean } | null>(null);
   const { data: status } = useQuery({
     queryKey: ["status"],
     queryFn: () => apiGet<Status>("/api/status"),
+    refetchInterval: 30_000,
+  });
+  const { data: tjStatus } = useQuery({
+    queryKey: ["tradejini-status"],
+    queryFn: () => apiGet<{ connected: boolean }>("/api/tradejini/status"),
     refetchInterval: 30_000,
   });
 
@@ -76,6 +85,35 @@ export default function TopBar() {
           ? healthy.map((p) => `${p.name} ${p.lastLatencyMs ?? "—"}ms`).join(" · ")
           : "live"}
       </span>
+      {newsUnread > 0 && (
+        <button
+          type="button"
+          onClick={() => {
+            addOrFocusWidget("news");
+            clearNewsUnread();
+            setTimeout(() => {
+              document.querySelector('[data-widget-type="news"]')?.scrollIntoView({ behavior: "smooth", block: "center" });
+            }, 60);
+          }}
+          className="news-blinker px-2 py-0.5 font-bold text-[10px] tracking-wider cursor-pointer"
+          title="New real-time market news arrived — click to view"
+        >
+          ● NEWS (+{newsUnread})
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={() => {
+          addOrFocusWidget("cubeplus");
+          setTimeout(() => {
+            document.querySelector('[data-widget-type="cubeplus"]')?.scrollIntoView({ behavior: "smooth", block: "center" });
+          }, 60);
+        }}
+        className={`term-btn ${tjStatus?.connected ? "!text-[var(--up)] !border-[var(--up)]" : ""}`}
+        title="Link or open Tradejini CubePlus broker panel"
+      >
+        {tjStatus?.connected ? "CUBEPLUS ● LINKED" : "LINK CUBEPLUS"}
+      </button>
       <span className={status?.ai ? "up" : "dim"}>AI {status?.ai ? "●" : "○"}</span>
     </header>
   );

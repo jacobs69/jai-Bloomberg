@@ -10,52 +10,86 @@ import {
   AreaSeries,
   BarSeries,
   type IChartApi,
+  type ISeriesApi,
   type UTCTimestamp,
 } from "lightweight-charts";
-import { apiGet, fmt, fmtBig, type Candle } from "../../lib/api";
+import { apiGet, fmt, fmtBig, fmtCurrency, pctClass, type Candle } from "../../lib/api";
 import { sma, ema, vwap, rsi, macd, bollinger, type Point } from "../../lib/indicators";
+import { useLiveStream } from "../../lib/useLiveStream";
 import { useWidgetSymbol, type WidgetInstance } from "../../store/terminal";
 
+const INTERVALS = ["1m", "3m", "5m", "15m", "30m", "1h", "1D", "1W", "1MO"] as const;
 const RANGES = ["1D", "5D", "1M", "6M", "YTD", "1Y", "5Y", "MAX"] as const;
 const CHART_TYPES = ["candles", "bars", "line", "area"] as const;
 const INDICATORS = ["SMA20", "SMA50", "SMA200", "EMA20", "VWAP", "BOLL", "RSI", "MACD"] as const;
 
+type IntervalKey = (typeof INTERVALS)[number];
 type Range = (typeof RANGES)[number];
 type ChartType = (typeof CHART_TYPES)[number];
 type Indicator = (typeof INDICATORS)[number];
+
+const INTERVAL_SECONDS: Record<IntervalKey, number> = {
+  "1m": 60,
+  "3m": 180,
+  "5m": 300,
+  "15m": 900,
+  "30m": 1800,
+  "1h": 3600,
+  "1D": 86_400,
+  "1W": 7 * 86_400,
+  "1MO": 30 * 86_400,
+};
+
+const INTRADAY_SET = new Set<IntervalKey>(["1m", "3m", "5m", "15m", "30m", "1h"]);
 
 const ts = (t: number) => t as UTCTimestamp;
 const toMap = (pts: Point[]) => new Map(pts.map((p) => [p.time, p.value]));
 
 const INDICATOR_COLOR: Record<string, string> = {
-  SMA20: "#ffd966", SMA50: "#4fc3f7", SMA200: "#ba68c8", EMA20: "#ff8a65",
-  VWAP: "#80cbc4", RSI: "#ff9900", BOLL: "#ff9900", MACD: "#4fc3f7",
+  SMA20: "#ffd966",
+  SMA50: "#4fc3f7",
+  SMA200: "#ba68c8",
+  EMA20: "#ff8a65",
+  VWAP: "#80cbc4",
+  RSI: "#ff9900",
+  BOLL: "#ff9900",
+  MACD: "#4fc3f7",
 };
 
 export default function ChartWidget({ widget }: { widget: WidgetInstance }) {
   const symbol = useWidgetSymbol(widget);
+  const [intervalKey, setIntervalKey] = useState<IntervalKey>("5m");
   const [range, setRange] = useState<Range>("6M");
   const [chartType, setChartType] = useState<ChartType>("candles");
   const [active, setActive] = useState<Set<Indicator>>(new Set(["SMA20"]));
   const [legend, setLegend] = useState<Candle | null>(null);
+
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  const mainSeriesRef = useRef<ISeriesApi<any> | null>(null);
+  const lastCandleRef = useRef<Candle | null>(null);
+
+  const isIntraday = INTRADAY_SET.has(intervalKey);
 
   const { data: candles, error } = useQuery({
-    queryKey: ["history", symbol, range],
-    queryFn: () => apiGet<Candle[]>(`/api/history/${encodeURIComponent(symbol)}?range=${range}`),
-    refetchInterval: range === "1D" ? 8_000 : 60_000,
+    queryKey: ["history", symbol, intervalKey, intervalKey === "1D" ? range : "auto"],
+    queryFn: () =>
+      apiGet<Candle[]>(
+        `/api/history/${encodeURIComponent(symbol)}?range=${range}&interval=${encodeURIComponent(intervalKey)}`
+      ),
+    refetchInterval: isIntraday ? 15_000 : 60_000,
   });
 
-  // Fast time -> candle lookup for the crosshair legend, independent of chart type.
+  // Real-time SSE live quote ticks update the active candle immediately
+  const { ticks, connected } = useLiveStream([symbol]);
+  const liveQuote = ticks[symbol];
+
   const byTime = useMemo(() => {
     const m = new Map<number, Candle>();
     for (const c of candles ?? []) m.set(c.time, c);
     return m;
   }, [candles]);
 
-  // Computed once per candles/active change, shared by both the chart overlays
-  // below and the hover legend — avoids recomputing the same series twice.
   const indicatorData = useMemo(() => {
     if (!candles || candles.length === 0) return null;
     return {
@@ -123,7 +157,9 @@ export default function ChartWidget({ widget }: { widget: WidgetInstance }) {
   }, [legend, indicatorMaps]);
 
   useEffect(() => {
-    setLegend(candles && candles.length > 0 ? candles[candles.length - 1] : null);
+    const last = candles && candles.length > 0 ? candles[candles.length - 1] : null;
+    lastCandleRef.current = last;
+    setLegend(last);
   }, [candles]);
 
   useEffect(() => {
@@ -134,10 +170,9 @@ export default function ChartWidget({ widget }: { widget: WidgetInstance }) {
       layout: { background: { color: "#0a0a0a" }, textColor: "#808080", fontSize: 10, attributionLogo: false },
       grid: { vertLines: { color: "#1a1a1a" }, horzLines: { color: "#1a1a1a" } },
       crosshair: { mode: 0 },
-      timeScale: { borderColor: "#262626", timeVisible: range === "1D" || range === "5D" },
+      timeScale: { borderColor: "#262626", timeVisible: isIntraday, secondsVisible: false },
       rightPriceScale: { borderColor: "#262626" },
       autoSize: true,
-      // Mouse-wheel is left free for page scrolling — zoom via drag, pinch, or the range buttons instead.
       handleScroll: { mouseWheel: false, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: true },
       handleScale: { mouseWheel: false, pinch: true, axisPressedMouseMove: true },
     });
@@ -146,36 +181,50 @@ export default function ChartWidget({ widget }: { widget: WidgetInstance }) {
     const upColor = "#00c853";
     const downColor = "#ff3d3d";
 
+    let mainSeries: ISeriesApi<any>;
     if (chartType === "candles") {
-      chart
-        .addSeries(CandlestickSeries, {
-          upColor, downColor, borderUpColor: upColor, borderDownColor: downColor,
-          wickUpColor: upColor, wickDownColor: downColor,
-        })
-        .setData(candles.map((c) => ({ time: ts(c.time), open: c.open, high: c.high, low: c.low, close: c.close })));
+      mainSeries = chart.addSeries(CandlestickSeries, {
+        upColor,
+        downColor,
+        borderUpColor: upColor,
+        borderDownColor: downColor,
+        wickUpColor: upColor,
+        wickDownColor: downColor,
+      });
+      mainSeries.setData(
+        candles.map((c) => ({ time: ts(c.time), open: c.open, high: c.high, low: c.low, close: c.close }))
+      );
     } else if (chartType === "bars") {
-      chart
-        .addSeries(BarSeries, { upColor, downColor })
-        .setData(candles.map((c) => ({ time: ts(c.time), open: c.open, high: c.high, low: c.low, close: c.close })));
+      mainSeries = chart.addSeries(BarSeries, { upColor, downColor });
+      mainSeries.setData(
+        candles.map((c) => ({ time: ts(c.time), open: c.open, high: c.high, low: c.low, close: c.close }))
+      );
     } else if (chartType === "line") {
-      chart
-        .addSeries(LineSeries, { color: "#ff9900", lineWidth: 1 })
-        .setData(candles.map((c) => ({ time: ts(c.time), value: c.close })));
+      mainSeries = chart.addSeries(LineSeries, { color: "#ff9900", lineWidth: 1 });
+      mainSeries.setData(candles.map((c) => ({ time: ts(c.time), value: c.close })));
     } else {
-      chart
-        .addSeries(AreaSeries, { lineColor: "#ff9900", topColor: "rgba(255,153,0,0.25)", bottomColor: "rgba(255,153,0,0)" })
-        .setData(candles.map((c) => ({ time: ts(c.time), value: c.close })));
+      mainSeries = chart.addSeries(AreaSeries, {
+        lineColor: "#ff9900",
+        topColor: "rgba(255,153,0,0.25)",
+        bottomColor: "rgba(255,153,0,0)",
+      });
+      mainSeries.setData(candles.map((c) => ({ time: ts(c.time), value: c.close })));
     }
+    mainSeriesRef.current = mainSeries;
 
-    // volume histogram on its own scale at the bottom of the main pane
     const vol = chart.addSeries(HistogramSeries, { priceScaleId: "vol", priceFormat: { type: "volume" } });
     vol.priceScale().applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
     vol.setData(
-      candles.map((c) => ({ time: ts(c.time), value: c.volume, color: c.close >= c.open ? "rgba(0,200,83,0.4)" : "rgba(255,61,61,0.4)" }))
+      candles.map((c) => ({
+        time: ts(c.time),
+        value: c.volume,
+        color: c.close >= c.open ? "rgba(0,200,83,0.4)" : "rgba(255,61,61,0.4)",
+      }))
     );
 
     const overlay = (points: Point[], color: string) =>
-      chart.addSeries(LineSeries, { color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false })
+      chart
+        .addSeries(LineSeries, { color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false })
         .setData(points.map((p) => ({ time: ts(p.time), value: p.value })));
 
     if (indicatorData?.SMA20) overlay(indicatorData.SMA20, INDICATOR_COLOR.SMA20);
@@ -197,20 +246,26 @@ export default function ChartWidget({ widget }: { widget: WidgetInstance }) {
     if (indicatorData?.MACD) {
       const m = indicatorData.MACD;
       const pane = paneIdx++;
-      chart.addSeries(HistogramSeries, { color: "#4fc3f7" }, pane).setData(
-        m.histogram.map((p) => ({ time: ts(p.time), value: p.value, color: p.value >= 0 ? "rgba(0,200,83,0.6)" : "rgba(255,61,61,0.6)" }))
-      );
-      chart.addSeries(LineSeries, { color: "#ff9900", lineWidth: 1 }, pane).setData(
-        m.macd.map((p) => ({ time: ts(p.time), value: p.value }))
-      );
-      chart.addSeries(LineSeries, { color: "#ffffff", lineWidth: 1 }, pane).setData(
-        m.signal.map((p) => ({ time: ts(p.time), value: p.value }))
-      );
+      chart
+        .addSeries(HistogramSeries, { color: "#4fc3f7" }, pane)
+        .setData(
+          m.histogram.map((p) => ({
+            time: ts(p.time),
+            value: p.value,
+            color: p.value >= 0 ? "rgba(0,200,83,0.6)" : "rgba(255,61,61,0.6)",
+          }))
+        );
+      chart
+        .addSeries(LineSeries, { color: "#ff9900", lineWidth: 1 }, pane)
+        .setData(m.macd.map((p) => ({ time: ts(p.time), value: p.value })));
+      chart
+        .addSeries(LineSeries, { color: "#ffffff", lineWidth: 1 }, pane)
+        .setData(m.signal.map((p) => ({ time: ts(p.time), value: p.value })));
     }
 
     chart.subscribeCrosshairMove((param) => {
       if (!param.time) {
-        setLegend(candles[candles.length - 1]);
+        setLegend(lastCandleRef.current ?? candles[candles.length - 1]);
         return;
       }
       const hit = byTime.get(param.time as number);
@@ -219,10 +274,55 @@ export default function ChartWidget({ widget }: { widget: WidgetInstance }) {
 
     chart.timeScale().fitContent();
     return () => {
+      mainSeriesRef.current = null;
       chart.remove();
       chartRef.current = null;
     };
-  }, [candles, chartType, indicatorData, range, byTime]);
+  }, [candles, chartType, indicatorData, isIntraday, byTime]);
+
+  // Real-time tick bar patch on live SSE price changes
+  useEffect(() => {
+    const series = mainSeriesRef.current;
+    const prev = lastCandleRef.current;
+    const price = liveQuote?.price;
+    if (!series || !prev || price === null || price === undefined || !isFinite(price)) return;
+
+    const bucket = INTERVAL_SECONDS[intervalKey];
+    const nowSec = liveQuote.time ?? Math.floor(Date.now() / 1000);
+    const barTime = Math.floor(nowSec / bucket) * bucket;
+    const targetTime = Math.max(prev.time, isIntraday ? barTime : prev.time);
+
+    const updated: Candle =
+      targetTime > prev.time
+        ? { time: targetTime, open: price, high: price, low: price, close: price, volume: prev.volume }
+        : {
+            time: prev.time,
+            open: prev.open,
+            high: Math.max(prev.high, price),
+            low: Math.min(prev.low, price),
+            close: price,
+            volume: prev.volume,
+          };
+
+    lastCandleRef.current = updated;
+    setLegend(updated);
+
+    try {
+      if (chartType === "candles" || chartType === "bars") {
+        series.update({
+          time: ts(updated.time),
+          open: updated.open,
+          high: updated.high,
+          low: updated.low,
+          close: updated.close,
+        });
+      } else {
+        series.update({ time: ts(updated.time), value: updated.close });
+      }
+    } catch {
+      // ignore if chart series disposed mid-update
+    }
+  }, [liveQuote, chartType, intervalKey, isIntraday]);
 
   const toggleIndicator = (ind: Indicator) =>
     setActive((prev) => {
@@ -234,35 +334,76 @@ export default function ChartWidget({ widget }: { widget: WidgetInstance }) {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex gap-1 p-1 flex-wrap shrink-0">
-        {RANGES.map((r) => (
-          <button key={r} className={`term-btn ${range === r ? "active" : ""}`} onClick={() => setRange(r)}>
-            {r}
+      <div className="flex gap-1 p-1 flex-wrap shrink-0 items-center border-b border-[#161616]">
+        {INTERVALS.map((iv) => (
+          <button
+            key={iv}
+            className={`term-btn ${intervalKey === iv ? "active" : ""}`}
+            onClick={() => setIntervalKey(iv)}
+            title={`Timeframe ${iv}`}
+          >
+            {iv}
           </button>
         ))}
-        <span className="w-2" />
+        {intervalKey === "1D" && (
+          <>
+            <span className="w-1" />
+            {RANGES.map((r) => (
+              <button key={r} className={`term-btn ${range === r ? "active" : ""}`} onClick={() => setRange(r)}>
+                {r}
+              </button>
+            ))}
+          </>
+        )}
+        <span className="w-1.5" />
         {CHART_TYPES.map((t) => (
           <button key={t} className={`term-btn ${chartType === t ? "active" : ""}`} onClick={() => setChartType(t)}>
             {t.toUpperCase()}
           </button>
         ))}
-        <span className="w-2" />
+        <span className="w-1.5" />
         {INDICATORS.map((ind) => (
-          <button key={ind} className={`term-btn ${active.has(ind) ? "active" : ""}`} onClick={() => toggleIndicator(ind)}>
+          <button
+            key={ind}
+            className={`term-btn ${active.has(ind) ? "active" : ""}`}
+            onClick={() => toggleIndicator(ind)}
+          >
             {ind}
           </button>
         ))}
+        <span className="ml-auto flex items-center gap-2 text-[10px] pr-1">
+          {liveQuote?.price !== null && liveQuote?.price !== undefined && (
+            <span className={pctClass(liveQuote.changePercent)}>
+              {fmtCurrency(liveQuote.price, liveQuote.currency)}{" "}
+              {liveQuote.changePercent !== null
+                ? `(${liveQuote.changePercent >= 0 ? "+" : ""}${fmt(liveQuote.changePercent)}%)`
+                : ""}
+            </span>
+          )}
+          <span className={connected ? "up" : "dim"}>{connected ? "● LIVE" : "○ SYNC"}</span>
+        </span>
       </div>
       {error && <div className="p-2 down">Error: {(error as Error).message}</div>}
       <div className="relative flex-1 min-h-0">
         {legend && (
-          <div className="absolute top-1 left-2 z-10 flex flex-col gap-0.5 text-[11px] pointer-events-none bg-[rgba(10,10,10,0.7)] px-2 py-1 rounded max-w-[95%]">
-            <div className="flex gap-3">
-              <span className="dim">O <span className="text-[var(--text)]">{fmt(legend.open)}</span></span>
-              <span className="dim">H <span className="up">{fmt(legend.high)}</span></span>
-              <span className="dim">L <span className="down">{fmt(legend.low)}</span></span>
-              <span className="dim">C <span className={legend.close >= legend.open ? "up" : "down"}>{fmt(legend.close)}</span></span>
-              <span className="dim">Vol <span className="text-[var(--text)]">{fmtBig(legend.volume)}</span></span>
+          <div className="absolute top-1 left-2 z-10 flex flex-col gap-0.5 text-[11px] pointer-events-none bg-[rgba(10,10,10,0.75)] px-2 py-1 rounded max-w-[95%]">
+            <div className="flex gap-3 flex-wrap">
+              <span className="amber font-bold">{intervalKey}</span>
+              <span className="dim">
+                O <span className="text-[var(--text)]">{fmt(legend.open)}</span>
+              </span>
+              <span className="dim">
+                H <span className="up">{fmt(legend.high)}</span>
+              </span>
+              <span className="dim">
+                L <span className="down">{fmt(legend.low)}</span>
+              </span>
+              <span className="dim">
+                C <span className={legend.close >= legend.open ? "up" : "down"}>{fmt(legend.close)}</span>
+              </span>
+              <span className="dim">
+                Vol <span className="text-[var(--text)]">{fmtBig(legend.volume)}</span>
+              </span>
             </div>
             {indicatorRows.length > 0 && (
               <div className="flex gap-3 flex-wrap">

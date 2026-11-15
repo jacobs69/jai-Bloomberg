@@ -34,8 +34,14 @@ async function proxy(req: NextRequest, path: string[]): Promise<NextResponse> {
   const contentType = req.headers.get("content-type");
   if (contentType) headers.set("content-type", contentType);
   if (apiKey) headers.set("x-api-key", apiKey);
+  const cookie = req.headers.get("cookie");
+  if (cookie) headers.set("cookie", cookie);
   const forwardedFor = req.headers.get("x-forwarded-for");
   if (forwardedFor) headers.set("x-forwarded-for", forwardedFor);
+  const proto = req.headers.get("x-forwarded-proto") ?? req.nextUrl.protocol.replace(":", "");
+  if (proto) headers.set("x-forwarded-proto", proto);
+  const host = req.headers.get("x-forwarded-host") ?? req.headers.get("host");
+  if (host) headers.set("x-forwarded-host", host);
 
   const hasBody = req.method !== "GET" && req.method !== "HEAD" && req.method !== "DELETE";
 
@@ -46,10 +52,31 @@ async function proxy(req: NextRequest, path: string[]): Promise<NextResponse> {
     cache: "no-store",
   });
 
+  const respHeaders = new Headers();
+  const upstreamType = upstream.headers.get("content-type") ?? "application/json";
+  respHeaders.set("content-type", upstreamType);
+
+  const setCookies =
+    typeof (upstream.headers as any).getSetCookie === "function"
+      ? (upstream.headers as any).getSetCookie()
+      : upstream.headers.get("set-cookie")
+      ? [upstream.headers.get("set-cookie")!]
+      : [];
+  for (const sc of setCookies) respHeaders.append("set-cookie", sc);
+
+  if (upstreamType.includes("text/event-stream") && upstream.body) {
+    respHeaders.set("cache-control", "no-cache, no-transform");
+    respHeaders.set("x-accel-buffering", "no");
+    return new NextResponse(upstream.body, {
+      status: upstream.status,
+      headers: respHeaders,
+    });
+  }
+
   const body = upstream.status === 204 ? null : await upstream.arrayBuffer();
   return new NextResponse(body, {
     status: upstream.status,
-    headers: { "content-type": upstream.headers.get("content-type") ?? "application/json" },
+    headers: respHeaders,
   });
 }
 

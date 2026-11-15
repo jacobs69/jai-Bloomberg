@@ -115,6 +115,40 @@ table.data-table tbody tr:hover {
   100% { background-color: transparent; }
 }
 
+@keyframes news-blink-anim {
+  0%, 49% {
+    opacity: 1;
+    background-color: rgba(255, 153, 0, 0.24);
+    border-color: var(--amber);
+    color: var(--amber);
+  }
+  50%, 100% {
+    opacity: 0.45;
+    background-color: rgba(0, 200, 83, 0.14);
+    border-color: var(--up);
+    color: var(--up);
+  }
+}
+
+@keyframes news-dot-anim {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0.15; }
+}
+
+.news-blinker {
+  border: 1px solid var(--amber);
+  animation: news-blink-anim 900ms linear infinite;
+}
+
+.news-dot-blink {
+  animation: news-dot-anim 800ms linear infinite;
+}
+
+.news-row-new {
+  background: rgba(255, 153, 0, 0.09);
+  border-left: 2px solid var(--amber);
+}
+
 input,
 select {
   background: var(--panel-2);

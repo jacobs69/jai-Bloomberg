@@ -50,6 +50,7 @@ export type Quote = {
   currency: string | null;
   exchange: string | null;
   marketState: string | null;
+  time?: number | null;
   source: string;
   sector?: string;
   label?: string;

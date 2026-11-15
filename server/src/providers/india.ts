@@ -1,4 +1,5 @@
 import * as yahoo from "./yahoo.js";
+import * as indiaScrips from "./indiaScrips.js";
 
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
@@ -39,7 +40,6 @@ export function isExplicitNonIndianSymbol(symbol: string): boolean {
   const s = cleanIndianSymbol(symbol);
   if (INDIA_INDICES[s]) return false;
   if (s.endsWith(".NS") || s.endsWith(".BO") || s.startsWith("NSE:") || s.startsWith("BSE:")) return false;
-  // Forex pairs, futures, or non-Indian suffixed tickers
   if (s.includes("=X") || s.includes("=F")) return false;
   if (/\.(L|DE|PA|AS|BR|LS|MI|MC|SW|ST|CO|HE|OL|TO|AX|HK|T)$/.test(s)) return true;
   return false;
@@ -51,17 +51,30 @@ export function toYahooIndianSymbol(raw: string): string {
   if (s.startsWith("^")) return s;
   if (s.includes("=X") || s.includes("=F")) return s;
   if (s.endsWith(".NS") || s.endsWith(".BO")) return s;
+  const scrip = indiaScrips.resolveScripSync(s);
+  if (scrip) {
+    return scrip.exchange === "BSE" ? `${scrip.dispName}.BO` : `${scrip.dispName}.NS`;
+  }
   if (s.startsWith("NSE:")) return `${s.slice(4)}.NS`;
   if (s.startsWith("BSE:")) return `${s.slice(4)}.BO`;
+  if (/^\d{5,6}$/.test(s)) return `${s}.BO`;
   return `${s}.NS`;
 }
 
 function tvTickersForSymbol(raw: string): string[] {
   const s = cleanIndianSymbol(raw);
   if (INDIA_INDICES[s]) return [INDIA_INDICES[s].tv];
-  if (s.startsWith("NSE:") || s.startsWith("BSE:")) return [s];
+  const scrip = indiaScrips.resolveScripSync(s);
+  if (scrip) return [`${scrip.exchange}:${scrip.dispName}`];
+  if (s.startsWith("NSE:")) return [s];
+  if (s.startsWith("BSE:")) {
+    const code = s.slice(4);
+    if (/^\d{5,6}$/.test(code)) return [];
+    return [s];
+  }
   if (s.endsWith(".NS")) return [`NSE:${s.slice(0, -3)}`];
   if (s.endsWith(".BO")) return [`BSE:${s.slice(0, -3)}`];
+  if (/^\d{5,6}$/.test(s)) return [];
   return [`NSE:${s}`, `BSE:${s}`];
 }
 
@@ -92,6 +105,9 @@ const num = (v: unknown): number | null => (typeof v === "number" && isFinite(v)
 export async function quotes(symbols: string[]): Promise<yahoo.Quote[]> {
   const cleaned = symbols.map(cleanIndianSymbol).filter(Boolean);
   if (cleaned.length === 0) return [];
+  if (cleaned.some((s) => /^\d{5,6}$/.test(s.replace(/^BSE:/, "")))) {
+    await indiaScrips.getAllScrips().catch(() => []);
+  }
 
   const tickerToRequested = new Map<string, string[]>();
   for (const sym of cleaned) {
@@ -224,10 +240,47 @@ const RANGE_MAP: Record<string, { range: string; interval: string; mcRes: string
   MAX: { range: "max", interval: "1mo", mcRes: "1M", lookbackSec: 20 * 366 * 86_400 },
 };
 
-async function moneycontrolHistory(symbol: string, rangeKey: string): Promise<yahoo.Candle[]> {
-  const clean = cleanIndianSymbol(symbol).replace(/^(NSE|BSE):/, "").replace(/\.(NS|BO)$/, "");
+const INTERVAL_MAP: Record<
+  string,
+  { yahooRange: string; yahooInterval: string; mcRes: string; lookbackSec: number; resampleSec?: number }
+> = {
+  "1m": { yahooRange: "5d", yahooInterval: "1m", mcRes: "1", lookbackSec: 5 * 86_400 },
+  "3m": { yahooRange: "5d", yahooInterval: "1m", mcRes: "1", lookbackSec: 5 * 86_400, resampleSec: 180 },
+  "5m": { yahooRange: "5d", yahooInterval: "5m", mcRes: "5", lookbackSec: 7 * 86_400 },
+  "15m": { yahooRange: "1mo", yahooInterval: "15m", mcRes: "15", lookbackSec: 30 * 86_400 },
+  "30m": { yahooRange: "1mo", yahooInterval: "30m", mcRes: "30", lookbackSec: 30 * 86_400 },
+  "1h": { yahooRange: "3mo", yahooInterval: "60m", mcRes: "60", lookbackSec: 90 * 86_400 },
+  "1D": { yahooRange: "1y", yahooInterval: "1d", mcRes: "1D", lookbackSec: 366 * 86_400 },
+  "1W": { yahooRange: "5y", yahooInterval: "1wk", mcRes: "1W", lookbackSec: 5 * 366 * 86_400 },
+  "1MO": { yahooRange: "max", yahooInterval: "1mo", mcRes: "1M", lookbackSec: 20 * 366 * 86_400 },
+};
+
+function resampleCandles(candles: yahoo.Candle[], bucketSec: number): yahoo.Candle[] {
+  if (candles.length === 0) return [];
+  const buckets = new Map<number, yahoo.Candle>();
+  for (const c of candles) {
+    const t = Math.floor(c.time / bucketSec) * bucketSec;
+    const prev = buckets.get(t);
+    if (!prev) {
+      buckets.set(t, { time: t, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume });
+    } else {
+      prev.high = Math.max(prev.high, c.high);
+      prev.low = Math.min(prev.low, c.low);
+      prev.close = c.close;
+      prev.volume += c.volume;
+    }
+  }
+  return [...buckets.values()].sort((a, b) => a.time - b.time);
+}
+
+async function moneycontrolHistory(symbol: string, mcRes: string, lookbackSec: number, rangeKey?: string): Promise<yahoo.Candle[]> {
+  const scrip = await indiaScrips.resolveScrip(symbol).catch(() => null);
+  const clean =
+    scrip?.dispName ??
+    cleanIndianSymbol(symbol)
+      .replace(/^(NSE|BSE):/, "")
+      .replace(/\.(NS|BO)$/, "");
   if (INDIA_INDICES[cleanIndianSymbol(symbol)] || clean.startsWith("^") || clean.includes("=")) return [];
-  const { mcRes, lookbackSec } = RANGE_MAP[rangeKey] ?? RANGE_MAP["6M"];
   const to = Math.floor(Date.now() / 1000);
   const from =
     rangeKey === "YTD"
@@ -235,7 +288,7 @@ async function moneycontrolHistory(symbol: string, rangeKey: string): Promise<ya
       : to - lookbackSec;
   const url = `https://priceapi.moneycontrol.com/techCharts/indianMarket/stock/history?symbol=${encodeURIComponent(
     clean
-  )}&resolution=${encodeURIComponent(mcRes)}&from=${from}&to=${to}&countback=500`;
+  )}&resolution=${encodeURIComponent(mcRes)}&from=${from}&to=${to}&countback=1000`;
   const res = await fetch(url, {
     headers: { "User-Agent": UA, Accept: "application/json", Referer: "https://www.moneycontrol.com/" },
   });
@@ -255,27 +308,47 @@ async function moneycontrolHistory(symbol: string, rangeKey: string): Promise<ya
   return candles;
 }
 
-export async function history(symbol: string, rangeKey = "6M"): Promise<yahoo.Candle[]> {
-  const { range, interval } = RANGE_MAP[rangeKey] ?? RANGE_MAP["6M"];
+export async function history(symbol: string, rangeKey = "6M", intervalKey?: string): Promise<yahoo.Candle[]> {
+  // Ensure scrip master cache is warm before resolving numeric BSE codes
+  await indiaScrips.resolveScrip(symbol).catch(() => null);
+  const ivCfg = intervalKey ? INTERVAL_MAP[intervalKey] : undefined;
+  const rCfg = RANGE_MAP[rangeKey] ?? RANGE_MAP["6M"];
+
+  const yahooRange = ivCfg
+    ? intervalKey === "1D" && RANGE_MAP[rangeKey]
+      ? RANGE_MAP[rangeKey].range
+      : ivCfg.yahooRange
+    : rCfg.range;
+  const yahooInterval = ivCfg ? ivCfg.yahooInterval : rCfg.interval;
+  const mcRes = ivCfg ? ivCfg.mcRes : rCfg.mcRes;
+  const lookbackSec = ivCfg
+    ? intervalKey === "1D" && RANGE_MAP[rangeKey]
+      ? RANGE_MAP[rangeKey].lookbackSec
+      : ivCfg.lookbackSec
+    : rCfg.lookbackSec;
+  const resampleSec = ivCfg?.resampleSec;
+
+  const finalize = (bars: yahoo.Candle[]) => (resampleSec ? resampleCandles(bars, resampleSec) : bars);
+
   const ySym = toYahooIndianSymbol(symbol);
   try {
-    const candles = await yahoo.history(ySym, range, interval);
-    if (candles.length > 0) return candles;
+    const candles = await yahoo.history(ySym, yahooRange, yahooInterval);
+    if (candles.length > 0) return finalize(candles);
   } catch (err) {
-    if (!symbol.includes(".") && !symbol.startsWith("NSE:") && !INDIA_INDICES[cleanIndianSymbol(symbol)]) {
+    if (!symbol.includes(".") && !symbol.startsWith("NSE:") && !symbol.startsWith("BSE:") && !INDIA_INDICES[cleanIndianSymbol(symbol)]) {
       try {
-        const bse = await yahoo.history(`${cleanIndianSymbol(symbol)}.BO`, range, interval);
-        if (bse.length > 0) return bse;
+        const bse = await yahoo.history(`${cleanIndianSymbol(symbol)}.BO`, yahooRange, yahooInterval);
+        if (bse.length > 0) return finalize(bse);
       } catch {
         // fall through to Moneycontrol chart fallback
       }
     }
-    const mc = await moneycontrolHistory(symbol, rangeKey).catch(() => []);
-    if (mc.length > 0) return mc;
+    const mc = await moneycontrolHistory(symbol, mcRes, lookbackSec, rangeKey).catch(() => []);
+    if (mc.length > 0) return finalize(mc);
     throw err;
   }
-  const mc = await moneycontrolHistory(symbol, rangeKey).catch(() => []);
-  return mc;
+  const mc = await moneycontrolHistory(symbol, mcRes, lookbackSec, rangeKey).catch(() => []);
+  return finalize(mc);
 }
 
 export type IndianMarketRow = {
@@ -290,7 +363,7 @@ export type IndianMarketRow = {
   currency: string;
 };
 
-export async function marketScan(limit = 1500, exchangeFilter: "NSE" | "BSE" | "ALL" = "NSE"): Promise<IndianMarketRow[]> {
+export async function marketScan(limit = 5000, exchangeFilter: "NSE" | "BSE" | "ALL" = "NSE"): Promise<IndianMarketRow[]> {
   const filter: any[] = [
     { left: "type", operation: "equal", right: "stock" },
     { left: "typespecs", operation: "has", right: ["common"] },
@@ -318,7 +391,7 @@ export async function marketScan(limit = 1500, exchangeFilter: "NSE" | "BSE" | "
       const ticker = r.s.split(":")[1] ?? r.s;
       const exch = exchange ?? (r.s.startsWith("BSE:") ? "BSE" : "NSE");
       return {
-        symbol: exch === "BSE" && exchangeFilter === "BSE" ? `BSE:${ticker}` : ticker,
+        symbol: exch === "BSE" ? `BSE:${ticker}` : ticker,
         name: name ?? ticker,
         price: num(close),
         changePercent: num(change),
@@ -346,24 +419,44 @@ export async function search(query: string): Promise<IndianSearchResult[]> {
     (i) => i.symbol.toLowerCase().includes(qLower) || i.name.toLowerCase().includes(qLower)
   );
 
-  const url = `https://symbol-search.tradingview.com/symbol_search/v3/?text=${encodeURIComponent(
-    query
-  )}&hl=1&lang=en&search_type=undefined&domain=production&sort_by_country=IN`;
-  const res = await fetch(url, { headers: TV_HEADERS });
-  if (!res.ok) throw new Error(`tradingview search ${res.status}`);
-  const json = await res.json();
-  const rows: any[] = json?.symbols ?? [];
-  const strip = (s: string) => String(s).replace(/<\/?em>/g, "");
+  // Query full ~24,000 NSE & BSE Scrip Master first + TradingView search in parallel
+  const [scripsRes, tvRes] = await Promise.allSettled([
+    indiaScrips.searchScrips(query, "ALL", 25),
+    (async () => {
+      const url = `https://symbol-search.tradingview.com/symbol_search/v3/?text=${encodeURIComponent(
+        query
+      )}&hl=1&lang=en&search_type=undefined&domain=production&sort_by_country=IN`;
+      const res = await fetch(url, { headers: TV_HEADERS });
+      if (!res.ok) return [];
+      const json = await res.json();
+      return (json?.symbols ?? []) as any[];
+    })(),
+  ]);
 
+  const seen = new Set<string>(indexMatches.map((i) => i.symbol));
+  const out: IndianSearchResult[] = [...indexMatches];
+
+  if (scripsRes.status === "fulfilled") {
+    for (const s of scripsRes.value) {
+      if (seen.has(s.symbol)) continue;
+      seen.add(s.symbol);
+      out.push({
+        symbol: s.symbol,
+        name: s.exchange === "BSE" && s.excToken ? `${s.name} (${s.excToken})` : s.name,
+        exchange: s.exchange,
+        type: s.asset,
+      });
+      if (out.length >= 25) return out;
+    }
+  }
+
+  const strip = (s: string) => String(s).replace(/<\/?em>/g, "");
+  const rows = tvRes.status === "fulfilled" ? tvRes.value : [];
   const indianRows = rows.filter((r) => {
     const ex = String(r.exchange ?? "").toUpperCase();
     return (ex === "NSE" || ex === "BSE") && ["stock", "fund", "dr", "index"].includes(r.type);
   });
-
   const chosen = indianRows.length > 0 ? indianRows : rows.filter((r) => ["stock", "fund", "dr", "index"].includes(r.type));
-
-  const seen = new Set<string>(indexMatches.map((i) => i.symbol));
-  const out: IndianSearchResult[] = [...indexMatches];
 
   for (const r of chosen) {
     const exchange = String(r.exchange ?? "").toUpperCase();
@@ -377,7 +470,7 @@ export async function search(query: string): Promise<IndianSearchResult[]> {
       exchange: exchange || "NSE",
       type: r.type ?? "stock",
     });
-    if (out.length >= 15) break;
+    if (out.length >= 30) break;
   }
 
   return out;

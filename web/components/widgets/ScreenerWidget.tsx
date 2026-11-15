@@ -20,6 +20,7 @@ type Row = {
 export default function ScreenerWidget() {
   const setActiveSymbol = useTerminal((s) => s.setActiveSymbol);
   const [market, setMarket] = useState<"in" | "bse" | "us" | "eu">("in");
+  const [searchQ, setSearchQ] = useState("");
   const [sector, setSector] = useState("");
   const [changeMin, setChangeMin] = useState("");
   const [marketCapMinB, setMarketCapMinB] = useState("");
@@ -36,6 +37,7 @@ export default function ScreenerWidget() {
   const isIndia = market === "in" || market === "bse";
   const params = new URLSearchParams();
   params.set("market", market);
+  if (searchQ.trim()) params.set("q", searchQ.trim());
   if (sector) params.set("sector", sector);
   if (changeMin) params.set("changeMin", changeMin);
   if (marketCapMinB) {
@@ -45,6 +47,7 @@ export default function ScreenerWidget() {
   if (volumeMinM) params.set("volumeMin", String(Number(volumeMinM) * 1e6));
   params.set("sort", sort);
   params.set("dir", dir);
+  params.set("limit", "1000");
 
   const { data = [], isLoading, error } = useQuery({
     queryKey: ["screener", params.toString()],
@@ -81,6 +84,12 @@ export default function ScreenerWidget() {
             </button>
           ))}
         </div>
+        <input
+          className="w-44"
+          placeholder="Filter ticker / company…"
+          value={searchQ}
+          onChange={(e) => setSearchQ(e.target.value)}
+        />
         <select value={sector} onChange={(e) => setSector(e.target.value)}>
           <option value="">All sectors</option>
           {sectors.map((s) => (
@@ -95,7 +104,7 @@ export default function ScreenerWidget() {
           onChange={(e) => setMarketCapMinB(e.target.value)}
         />
         <input className="w-24" placeholder="Vol min (M)" value={volumeMinM} onChange={(e) => setVolumeMinM(e.target.value)} />
-        <span className="dim ml-auto">{isLoading ? "…" : `${data.length} results`}</span>
+        <span className="dim ml-auto">{isLoading ? "…" : `${data.length} stocks`}</span>
       </div>
       {error && <div className="p-2 down">Error: {(error as Error).message}</div>}
       <table className="data-table">

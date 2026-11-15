@@ -30,6 +30,7 @@ export default function Terminal() {
           "8": () => addWidget("portfolio"),
           "9": () => addWidget("ai"),
           "0": () => addWidget("ipo"),
+          b: () => addWidget("cubeplus"),
         };
         const fn = map[e.key];
         if (fn) {

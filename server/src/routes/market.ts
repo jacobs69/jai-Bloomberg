@@ -231,8 +231,10 @@ marketRouter.get("/quotes", async (req, res) => {
 marketRouter.get("/history/:symbol", async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   const rangeKey = String(req.query.range ?? "6M");
+  const intervalKey = req.query.interval ? String(req.query.interval) : undefined;
+  const ttl = intervalKey && ["1m", "3m", "5m"].includes(intervalKey) ? 5_000 : HISTORY_TTL;
   try {
-    const data = await cached(`history:${symbol}:${rangeKey}`, HISTORY_TTL, () =>
+    const data = await cached(`history:${symbol}:${rangeKey}:${intervalKey ?? "auto"}`, ttl, () =>
       binance.CRYPTO_SYMBOLS.has(symbol)
         ? binance.history(symbol, rangeKey)
         : isVix(symbol)
@@ -244,7 +246,7 @@ marketRouter.get("/history/:symbol", async (req, res) => {
             ["stooq", () => stooq.history(symbol)],
           ])
         : withFallback([
-            ["india", () => india.history(symbol, rangeKey)],
+            ["india", () => india.history(symbol, rangeKey, intervalKey)],
             ["yahoo", () => yahoo.history(symbol, yahooRange(rangeKey).range, yahooRange(rangeKey).interval)],
           ])
     );
@@ -566,10 +568,10 @@ async function eurFxRates(): Promise<Record<string, number>> {
 
 async function marketRows(market: MarketCode): Promise<tradingview.MarketRow[]> {
   if (market === "in") {
-    return cached("marketscan:in:nse", 3_000, () => india.marketScan(1500, "NSE"));
+    return cached("marketscan:in:nse", 3_000, () => india.marketScan(5000, "NSE"));
   }
   if (market === "bse") {
-    return cached("marketscan:in:bse", 3_000, () => india.marketScan(1500, "BSE"));
+    return cached("marketscan:in:bse", 3_000, () => india.marketScan(5000, "BSE"));
   }
   if (market === "eu") {
     return cached("marketscan:eu", 5_000, async () => {
@@ -597,6 +599,8 @@ marketRouter.get("/screener", async (req, res) => {
   try {
     let rows = await marketRows(marketParam(req));
     const num = (v: unknown) => (v === undefined ? undefined : Number(v));
+    const q = req.query.q ? String(req.query.q).trim().toLowerCase() : "";
+    const limit = Math.max(50, Math.min(2000, Number(req.query.limit ?? 500) || 500));
     const f = {
       sector: req.query.sector ? String(req.query.sector) : undefined,
       marketCapMin: num(req.query.marketCapMin),
@@ -605,6 +609,7 @@ marketRouter.get("/screener", async (req, res) => {
       volumeMin: num(req.query.volumeMin),
     };
     rows = rows.filter((r) => {
+      if (q && !r.symbol.toLowerCase().includes(q) && !(r.name ?? "").toLowerCase().includes(q)) return false;
       if (f.sector && r.sector !== f.sector) return false;
       if (f.marketCapMin !== undefined && (r.marketCap ?? 0) < f.marketCapMin) return false;
       if (f.changeMin !== undefined && (r.changePercent ?? -Infinity) < f.changeMin) return false;
@@ -619,7 +624,7 @@ marketRouter.get("/screener", async (req, res) => {
       const bv = (b[sortKey] as number | null) ?? -Infinity;
       return (av < bv ? -1 : av > bv ? 1 : 0) * dir;
     });
-    res.json(rows.slice(0, 500));
+    res.json(rows.slice(0, limit));
   } catch (err) {
     fail(req, res, err);
   }
