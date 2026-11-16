@@ -9,8 +9,7 @@
     "declaration": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "resolveJsonModule": true,
-    "incremental": true
+    "resolveJsonModule": true
   },
   "include": ["src/**/*"],
   "exclude": ["src/**/*.test.ts"]

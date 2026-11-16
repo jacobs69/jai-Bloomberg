@@ -25,7 +25,8 @@ function resolveApiKey(): string {
 export const apiKey = resolveApiKey();
 (globalThis as Record<string, unknown>).__openTerminalApiKey = apiKey;
 
-if (!process.env.API_KEY) {
+if (!process.env.API_KEY && !(globalThis as Record<string, unknown>).__openTerminalApiKeyWarned) {
+  (globalThis as Record<string, unknown>).__openTerminalApiKeyWarned = true;
   console.warn(
     `No API_KEY set — generated one and saved it to ${keyFile}. ` +
       "The bundled web app reads this file automatically for local use. " +

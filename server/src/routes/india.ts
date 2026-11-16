@@ -52,6 +52,29 @@ indiaRouter.get("/stream", (req, res) => {
 
   let closed = false;
   let busy = false;
+  let timer: ReturnType<typeof setInterval>;
+  let keepalive: ReturnType<typeof setInterval>;
+
+  const cleanup = () => {
+    if (closed) return;
+    closed = true;
+    clearInterval(timer);
+    clearInterval(keepalive);
+  };
+
+  const safeWrite = (chunk: string): boolean => {
+    if (closed || res.writableEnded || res.destroyed) {
+      cleanup();
+      return false;
+    }
+    try {
+      res.write(chunk);
+      return true;
+    } catch {
+      cleanup();
+      return false;
+    }
+  };
 
   const pushQuotes = async (event: "snapshot" | "tick") => {
     if (closed || busy) return;
@@ -59,8 +82,7 @@ indiaRouter.get("/stream", (req, res) => {
     try {
       const data = await india.quotes(symbols);
       if (!closed && data.length > 0) {
-        res.write(`event: ${event}\n`);
-        res.write(`data: ${JSON.stringify({ ts: Date.now(), quotes: data })}\n\n`);
+        safeWrite(`event: ${event}\ndata: ${JSON.stringify({ ts: Date.now(), quotes: data })}\n\n`);
       }
     } catch {
       // keep SSE stream alive cleanly on transient fetch error
@@ -70,16 +92,17 @@ indiaRouter.get("/stream", (req, res) => {
   };
 
   void pushQuotes("snapshot");
-  const timer = setInterval(() => void pushQuotes("tick"), 1_000);
-  const keepalive = setInterval(() => {
-    if (!closed) res.write(": keepalive\n\n");
+  timer = setInterval(() => void pushQuotes("tick"), 1_000);
+  keepalive = setInterval(() => {
+    safeWrite(": keepalive\n\n");
   }, 15_000);
+  timer.unref?.();
+  keepalive.unref?.();
 
-  req.on("close", () => {
-    closed = true;
-    clearInterval(timer);
-    clearInterval(keepalive);
-  });
+  req.on("close", cleanup);
+  req.on("error", cleanup);
+  res.on("close", cleanup);
+  res.on("error", cleanup);
 });
 
 indiaRouter.get("/indices", async (req, res) => {
@@ -169,6 +192,29 @@ indiaRouter.get("/news/stream", (req, res) => {
   let busy = false;
   let initialized = false;
   const seenKeys = new Set<string>();
+  let timer: ReturnType<typeof setInterval>;
+  let keepalive: ReturnType<typeof setInterval>;
+
+  const cleanup = () => {
+    if (closed) return;
+    closed = true;
+    clearInterval(timer);
+    clearInterval(keepalive);
+  };
+
+  const safeWrite = (chunk: string): boolean => {
+    if (closed || res.writableEnded || res.destroyed) {
+      cleanup();
+      return false;
+    }
+    try {
+      res.write(chunk);
+      return true;
+    } catch {
+      cleanup();
+      return false;
+    }
+  };
 
   const pollAndPush = async () => {
     if (closed || busy) return;
@@ -180,8 +226,7 @@ indiaRouter.get("/news/stream", (req, res) => {
       if (!initialized) {
         for (const item of items) seenKeys.add(newsItemKey(item));
         initialized = true;
-        res.write("event: snapshot\n");
-        res.write(`data: ${JSON.stringify({ ts: Date.now(), items })}\n\n`);
+        safeWrite(`event: snapshot\ndata: ${JSON.stringify({ ts: Date.now(), items })}\n\n`);
         return;
       }
 
@@ -194,11 +239,9 @@ indiaRouter.get("/news/stream", (req, res) => {
           seenKeys.clear();
           for (const k of keep) seenKeys.add(k);
         }
-        res.write("event: news_update\n");
-        res.write(`data: ${JSON.stringify({ ts: Date.now(), items, newItems })}\n\n`);
+        safeWrite(`event: news_update\ndata: ${JSON.stringify({ ts: Date.now(), items, newItems })}\n\n`);
       } else {
-        res.write("event: heartbeat\n");
-        res.write(`data: ${JSON.stringify({ ts: Date.now() })}\n\n`);
+        safeWrite(`event: heartbeat\ndata: ${JSON.stringify({ ts: Date.now() })}\n\n`);
       }
     } catch {
       // Keep SSE connection alive cleanly if an upstream RSS source hiccups
@@ -208,16 +251,17 @@ indiaRouter.get("/news/stream", (req, res) => {
   };
 
   void pollAndPush();
-  const timer = setInterval(() => void pollAndPush(), 10_000);
-  const keepalive = setInterval(() => {
-    if (!closed) res.write(": keepalive\n\n");
+  timer = setInterval(() => void pollAndPush(), 10_000);
+  keepalive = setInterval(() => {
+    safeWrite(": keepalive\n\n");
   }, 15_000);
+  timer.unref?.();
+  keepalive.unref?.();
 
-  req.on("close", () => {
-    closed = true;
-    clearInterval(timer);
-    clearInterval(keepalive);
-  });
+  req.on("close", cleanup);
+  req.on("error", cleanup);
+  res.on("close", cleanup);
+  res.on("error", cleanup);
 });
 
 indiaRouter.get("/news", async (req, res) => {

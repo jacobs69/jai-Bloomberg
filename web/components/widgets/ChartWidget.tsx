@@ -71,7 +71,7 @@ export default function ChartWidget({ widget }: { widget: WidgetInstance }) {
 
   const isIntraday = INTRADAY_SET.has(intervalKey);
 
-  const { data: candles, error } = useQuery({
+  const { data: rawCandles, error } = useQuery({
     queryKey: ["history", symbol, intervalKey, intervalKey === "1D" ? range : "auto"],
     queryFn: () =>
       apiGet<Candle[]>(
@@ -80,18 +80,39 @@ export default function ChartWidget({ widget }: { widget: WidgetInstance }) {
     refetchInterval: isIntraday ? 15_000 : 60_000,
   });
 
+  const candles = useMemo(() => {
+    if (!rawCandles || rawCandles.length === 0) return [];
+    const byTs = new Map<number, Candle>();
+    for (const c of rawCandles) {
+      if (
+        !Number.isFinite(c.time) ||
+        !Number.isFinite(c.open) ||
+        !Number.isFinite(c.high) ||
+        !Number.isFinite(c.low) ||
+        !Number.isFinite(c.close)
+      ) {
+        continue;
+      }
+      byTs.set(c.time, {
+        ...c,
+        volume: Number.isFinite(c.volume) ? c.volume : 0,
+      });
+    }
+    return [...byTs.values()].sort((a, b) => a.time - b.time);
+  }, [rawCandles]);
+
   // Real-time SSE live quote ticks update the active candle immediately
   const { ticks, connected } = useLiveStream([symbol]);
   const liveQuote = ticks[symbol];
 
   const byTime = useMemo(() => {
     const m = new Map<number, Candle>();
-    for (const c of candles ?? []) m.set(c.time, c);
+    for (const c of candles) m.set(c.time, c);
     return m;
   }, [candles]);
 
   const indicatorData = useMemo(() => {
-    if (!candles || candles.length === 0) return null;
+    if (candles.length === 0) return null;
     return {
       SMA20: active.has("SMA20") ? sma(candles, 20) : null,
       SMA50: active.has("SMA50") ? sma(candles, 50) : null,

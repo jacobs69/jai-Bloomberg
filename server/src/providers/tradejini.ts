@@ -46,6 +46,8 @@ export function getAppBaseUrl(req?: Request): string {
     const host = (req.headers["x-forwarded-host"] as string)?.split(",")[0]?.trim() || req.get("host");
     if (host) return `${proto}://${host}`;
   }
+  const vercelUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim() || process.env.VERCEL_URL?.trim();
+  if (vercelUrl) return `https://${vercelUrl.replace(/^https?:\/\//, "")}`;
   return "http://localhost:3000";
 }
 

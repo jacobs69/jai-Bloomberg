@@ -350,7 +350,23 @@ export async function history(symbol: string, rangeKey = "6M", intervalKey?: str
     : rCfg.lookbackSec;
   const resampleSec = ivCfg?.resampleSec;
 
-  const finalize = (bars: yahoo.Candle[]) => (resampleSec ? resampleCandles(bars, resampleSec) : bars);
+  const finalize = (bars: yahoo.Candle[]) => {
+    const normalized = resampleSec ? resampleCandles(bars, resampleSec) : bars;
+    const byTime = new Map<number, yahoo.Candle>();
+    for (const b of normalized) {
+      if (
+        !Number.isFinite(b.time) ||
+        !Number.isFinite(b.open) ||
+        !Number.isFinite(b.high) ||
+        !Number.isFinite(b.low) ||
+        !Number.isFinite(b.close)
+      ) {
+        continue;
+      }
+      byTime.set(b.time, { ...b, volume: Number.isFinite(b.volume) ? b.volume : 0 });
+    }
+    return [...byTime.values()].sort((a, b) => a.time - b.time);
+  };
 
   const ySym = toYahooIndianSymbol(symbol);
   try {

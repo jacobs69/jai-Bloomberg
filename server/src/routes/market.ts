@@ -229,6 +229,23 @@ marketRouter.get("/quotes", async (req, res) => {
 
 // ---- history / candles ----
 
+function normalizeCandles(bars: yahoo.Candle[]): yahoo.Candle[] {
+  const byTime = new Map<number, yahoo.Candle>();
+  for (const b of bars) {
+    if (
+      !Number.isFinite(b.time) ||
+      !Number.isFinite(b.open) ||
+      !Number.isFinite(b.high) ||
+      !Number.isFinite(b.low) ||
+      !Number.isFinite(b.close)
+    ) {
+      continue;
+    }
+    byTime.set(b.time, { ...b, volume: Number.isFinite(b.volume) ? b.volume : 0 });
+  }
+  return [...byTime.values()].sort((a, b) => a.time - b.time);
+}
+
 marketRouter.get("/history/:symbol", async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   const rangeKey = String(req.query.range ?? "6M");
@@ -236,8 +253,8 @@ marketRouter.get("/history/:symbol", async (req, res) => {
   const ttl = intervalKey && ["1m", "3m", "5m"].includes(intervalKey) ? 5_000 : HISTORY_TTL;
   const cacheKey = `history:${symbol}:${rangeKey}:${intervalKey ?? "auto"}`;
   try {
-    const data = await cached(cacheKey, ttl, () =>
-      binance.CRYPTO_SYMBOLS.has(symbol)
+    const raw = await cached(cacheKey, ttl, async () => {
+      const bars = await (binance.CRYPTO_SYMBOLS.has(symbol)
         ? binance.history(symbol, rangeKey)
         : isVix(symbol)
         ? vixHistory(rangeKey)
@@ -250,13 +267,15 @@ marketRouter.get("/history/:symbol", async (req, res) => {
         : withFallback([
             ["india", () => india.history(symbol, rangeKey, intervalKey)],
             ["yahoo", () => yahoo.history(india.toYahooIndianSymbol(symbol), yahooRange(rangeKey).range, yahooRange(rangeKey).interval)],
-          ])
-    );
+          ]));
+      return normalizeCandles(bars);
+    });
+    const data = normalizeCandles(raw);
     if (!Array.isArray(data) || data.length === 0) throw new Error("empty history from all providers");
     res.json(data);
   } catch (err) {
     const stale = staleGet<yahoo.Candle[]>(cacheKey);
-    if (stale && stale.length > 0) return res.json(stale);
+    if (stale && stale.length > 0) return res.json(normalizeCandles(stale));
     fail(req, res, err);
   }
 });

@@ -243,13 +243,27 @@ export async function history(symbol: string, range: string, interval: string): 
   if (!result) throw new Error("yahoo: no chart data for " + symbol);
   const ts: number[] = result.timestamp ?? [];
   const q = result.indicators?.quote?.[0] ?? {};
-  const candles: Candle[] = [];
+  const byTime = new Map<number, Candle>();
   for (let i = 0; i < ts.length; i++) {
+    const t = ts[i];
     const [o, h, l, c] = [q.open?.[i], q.high?.[i], q.low?.[i], q.close?.[i]];
-    if (o == null || h == null || l == null || c == null) continue;
-    candles.push({ time: ts[i], open: o, high: h, low: l, close: c, volume: q.volume?.[i] ?? 0 });
+    if (
+      !Number.isFinite(t) ||
+      o == null ||
+      h == null ||
+      l == null ||
+      c == null ||
+      !Number.isFinite(o) ||
+      !Number.isFinite(h) ||
+      !Number.isFinite(l) ||
+      !Number.isFinite(c)
+    ) {
+      continue;
+    }
+    const vol = q.volume?.[i];
+    byTime.set(t, { time: t, open: o, high: h, low: l, close: c, volume: Number.isFinite(vol) ? vol : 0 });
   }
-  return candles;
+  return [...byTime.values()].sort((a, b) => a.time - b.time);
 }
 
 // ---- search ----

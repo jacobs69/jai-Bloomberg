@@ -14,11 +14,14 @@ import { rateLimit } from "./rateLimit.js";
 export function createApp(): Express {
   const app = express();
 
-  if (process.env.TRUST_PROXY === "1") {
+  if (process.env.TRUST_PROXY === "1" || process.env.VERCEL) {
     app.set("trust proxy", 1);
   }
 
-  const webOrigin = process.env.WEB_ORIGIN ?? "http://localhost:3000";
+  const webOrigin =
+    process.env.WEB_ORIGIN ??
+    process.env.APP_URL ??
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000");
   app.use(cors({ origin: webOrigin, credentials: true }));
   app.use(express.json());
 
@@ -42,6 +45,12 @@ export function createApp(): Express {
       providers: allStats(),
       ai: Boolean(process.env.ANTHROPIC_API_KEY),
     });
+  });
+
+  app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    if (res.headersSent) return;
+    const status = typeof err?.status === "number" ? err.status : 500;
+    res.status(status).json({ error: err?.message ?? "Internal server error" });
   });
 
   return app;
